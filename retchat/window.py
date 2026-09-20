@@ -151,6 +151,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_relay_remove_hub.set_enabled(False)
         self.add_action(self.action_relay_remove_hub)
 
+        # Action: Relay Add Hub (win.relay_add_hub)
+        self.action_relay_add_hub = Gio.SimpleAction.new("relay_add_hub", None)
+        self.action_relay_add_hub.connect("activate", lambda _a, _p: self._show_add_relay_dialog())
+        self.add_action(self.action_relay_add_hub)
+
     # --- UI Builders ---
     def _build_sidebar(self) -> Gtk.Widget:
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -414,6 +419,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_relay_part.set_enabled(False)
         self.action_relay_add_channel.set_enabled(False)
         self.action_relay_remove_hub.set_enabled(False)
+        self.action_relay_add_hub.set_enabled(False)
 
         if hasattr(self, "relay_list_box"):
             self.relay_list_box.unselect_all()
@@ -543,6 +549,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_relay_part.set_enabled(True)
         self.action_relay_add_channel.set_enabled(True)
         self.action_relay_remove_hub.set_enabled(True)
+        self.action_relay_add_hub.set_enabled(True)
 
         self.service.mark_rrc_room_read(hub_hash, room_name)
 
@@ -593,6 +600,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_relay_part.set_enabled(False)
         self.action_relay_add_channel.set_enabled(True)
         self.action_relay_remove_hub.set_enabled(True)
+        self.action_relay_add_hub.set_enabled(True)
 
         if hasattr(self, "conv_list_box"):
             self.conv_list_box.unselect_all()
@@ -765,6 +773,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.action_relay_part.set_enabled(False)
             self.action_relay_add_channel.set_enabled(False)
             self.action_relay_remove_hub.set_enabled(False)
+            self.action_relay_add_hub.set_enabled(False)
         self._load_relay_rooms()
         self._show_toast(f"Hub «{hub_name or hub_hash[:8]}» entfernt")
 

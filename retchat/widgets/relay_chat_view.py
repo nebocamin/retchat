@@ -188,6 +188,7 @@ class RelayChatView(Gtk.Box):
     def _build_menu(self):
         menu_model = Gio.Menu()
         menu_model.append("Kanal beitreten...", "win.relay_add_channel")
+        menu_model.append("Neuen Relay-Hub hinzufügen...", "win.relay_add_hub")
         menu_model.append("Kanal verlassen", "win.relay_part_room")
         menu_model.append("Verbindung neu herstellen", "win.relay_reconnect")
         menu_model.append("Hub-Adresse kopieren", "win.relay_copy_hash")

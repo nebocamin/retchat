@@ -61,18 +61,22 @@ class AddRelayDialog(_BaseDialog):
         )
 
         self.hash_row = Adw.EntryRow(title="Hub Ziel-Hash (32 Hex-Zeichen)")
+        self.hash_row.connect("entry-activated", lambda _e: self._on_custom_join_clicked(None))
         group_custom.add(self.hash_row)
 
         self.name_row = Adw.EntryRow(title="Name / Bezeichnung (optional)")
+        self.name_row.connect("entry-activated", lambda _e: self._on_custom_join_clicked(None))
         group_custom.add(self.name_row)
 
-        self.room_row = Adw.EntryRow(title="Erster Kanal (optional)")
-        self.room_row.set_placeholder_text("z. B. #general (oder leer lassen)")
+        self.room_row = Adw.EntryRow(title="Erster Kanal (optional, z. B. #general)")
+        self.room_row.connect("entry-activated", lambda _e: self._on_custom_join_clicked(None))
         group_custom.add(self.room_row)
 
-        save_row = Adw.ActionRow(title="Hub speichern und verbinden")
-        save_btn = Gtk.Button(label="Verbinden", valign=Gtk.Align.CENTER)
+        save_row = Adw.ActionRow()
+        save_btn = Gtk.Button(label="Hub speichern und verbinden", valign=Gtk.Align.CENTER)
         save_btn.add_css_class("suggested-action")
+        save_btn.add_css_class("pill")
+        save_btn.set_hexpand(True)
         save_btn.connect("clicked", self._on_custom_join_clicked)
         save_row.add_suffix(save_btn)
         group_custom.add(save_row)
