@@ -97,6 +97,11 @@ class RelayChatView(Gtk.Box):
         self.scrolled_window.set_hexpand(True)
         self.scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
+        self._auto_scroll = True
+        self.vadj = self.scrolled_window.get_vadjustment()
+        self.vadj.connect("value-changed", self._on_scroll_value_changed)
+        self.vadj.connect("changed", self._on_adj_changed)
+
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.messages_box.set_margin_top(12)
         self.messages_box.set_margin_bottom(12)
@@ -119,6 +124,8 @@ class RelayChatView(Gtk.Box):
         self.entry.set_placeholder_text("Nachricht schreiben (oder /me, /who, /part)...")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
+        self.entry.connect("notify::has-focus", self._on_entry_focus)
+        self.entry.connect("changed", self._on_entry_changed)
         self.composer_box.append(self.entry)
 
         self.send_btn = Gtk.Button(icon_name="mail-send-symbolic")
@@ -216,6 +223,7 @@ class RelayChatView(Gtk.Box):
 
         self.update_members(members)
 
+        self._auto_scroll = True
         while child := self.messages_box.get_first_child():
             self.messages_box.remove(child)
         self._displayed_keys.clear()
@@ -427,7 +435,7 @@ class RelayChatView(Gtk.Box):
             row_box.append(bubble)
             self.messages_box.append(row_box)
 
-        if scroll_to_bottom:
+        if scroll_to_bottom and self._auto_scroll:
             self._scroll_to_bottom()
 
     def _on_send_clicked(self, _widget):
@@ -436,16 +444,42 @@ class RelayChatView(Gtk.Box):
             return
 
         if self.current_hub_hash and self.current_room:
+            self._auto_scroll = True
+            self._scroll_to_bottom()
             self.on_send_message(self.current_hub_hash, self.current_room, text)
             self.entry.set_text("")
             self.entry.grab_focus()
 
-    def _scroll_to_bottom(self):
-        def _scroll():
-            adj = self.scrolled_window.get_vadjustment()
-            if adj:
-                adj.set_value(adj.get_upper() - adj.get_page_size())
-            return False
+    def _on_scroll_value_changed(self, adj):
+        max_val = adj.get_upper() - adj.get_page_size()
+        if max_val <= 0:
+            self._auto_scroll = True
+        else:
+            diff = max_val - adj.get_value()
+            self._auto_scroll = (diff <= 80)
 
-        from gi.repository import GLib
-        GLib.idle_add(_scroll)
+    def _on_adj_changed(self, adj):
+        if self._auto_scroll:
+            max_val = adj.get_upper() - adj.get_page_size()
+            if max_val > 0:
+                adj.set_value(max_val)
+
+    def _on_entry_focus(self, entry, _pspec):
+        if entry.has_focus():
+            self._auto_scroll = True
+            self._scroll_to_bottom()
+
+    def _on_entry_changed(self, _entry):
+        if not self._auto_scroll:
+            self._auto_scroll = True
+            self._scroll_to_bottom()
+
+    def _scroll_to_bottom(self):
+        self._auto_scroll = True
+        adj = self.scrolled_window.get_vadjustment()
+        if adj:
+            max_val = adj.get_upper() - adj.get_page_size()
+            if max_val > 0:
+                adj.set_value(max_val)
+            else:
+                adj.set_value(0)
