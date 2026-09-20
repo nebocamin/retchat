@@ -182,6 +182,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         # View Switcher (Chats vs Entdecken vs Relay)
         stack_switcher = Gtk.StackSwitcher()
+        stack_switcher.add_css_class("compact-switcher")
         stack_switcher.set_halign(Gtk.Align.CENTER)
         stack_switcher.set_margin_top(4)
         stack_switcher.set_margin_bottom(6)

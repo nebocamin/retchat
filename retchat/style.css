@@ -66,3 +66,26 @@
     background: transparent;
     box-shadow: none;
 }
+
+/* Compact segmented switcher for sidebar tabs (Chats / Entdecken / Relay) */
+.compact-switcher,
+stackswitcher {
+    margin-left: 6px;
+    margin-right: 6px;
+}
+
+.compact-switcher button,
+stackswitcher button {
+    padding-left: 10px;
+    padding-right: 10px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+    min-width: 0;
+}
+
+.compact-switcher button label,
+stackswitcher button label {
+    font-size: 0.88rem;
+    font-weight: 500;
+}
+
