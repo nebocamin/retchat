@@ -5,7 +5,7 @@ import os
 import subprocess
 import threading
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import gi
 gi.require_version('GLib', '2.0')
@@ -977,6 +977,83 @@ class ReticulumService:
             }
             result.append(info)
         return result
+
+    # ------------------------------------------------------------------ #
+    # LXMF Propagation Node Sync
+    # ------------------------------------------------------------------ #
+    def request_sync(self, target_node: Optional[str] = None) -> Tuple[bool, str]:
+        """Request LXMF message sync with default or specified propagation node."""
+        if not self.app:
+            return False, "NomadNet-Backend nicht bereit"
+
+        try:
+            if target_node:
+                try:
+                    target_bytes = bytes.fromhex(target_node)
+                    # Check if target is a known node with propagation capability
+                    for node in self.app.directory.known_nodes():
+                        if getattr(node, "source_hash", None) == target_bytes:
+                            self.app.message_router.set_outbound_propagation_node(target_bytes)
+                            break
+                except Exception:
+                    pass
+
+            if not self.app.get_default_propagation_node():
+                self.app.autoselect_propagation_node()
+
+            pnode = self.app.get_default_propagation_node()
+            if not pnode:
+                return False, "Kein Propagation-Node im Mesh verfügbar"
+
+            self.app.request_lxmf_sync()
+            pnode_hex = pnode.hex() if isinstance(pnode, bytes) else str(pnode)
+            return True, f"Synchronisierung mit Node [{pnode_hex[:8]}...{pnode_hex[-4:]}] gestartet..."
+        except Exception as e:
+            return False, f"Sync fehlgeschlagen: {e}"
+
+    def get_sync_status(self) -> str:
+        if not self.app:
+            return "Idle"
+        try:
+            return self.app.get_sync_status()
+        except Exception:
+            return "Idle"
+
+    def get_sync_status_text(self) -> str:
+        if not self.app:
+            return "Nicht bereit"
+        status = self.get_sync_status()
+        translations = {
+            "Idle": "Bereit",
+            "Path requested": "Pfad zum Propagation-Node wird gesucht...",
+            "Establishing link": "Verbindung zum Propagation-Node wird aufgebaut...",
+            "Link established": "Verbindung zum Propagation-Node hergestellt",
+            "Sync request sent": "Sync-Anfrage an Node gesendet...",
+            "Receiving messages": "Nachrichten werden empfangen...",
+            "Messages received": "Nachrichten empfangen",
+            "No path to node": "Kein Pfad zum Propagation-Node",
+            "Link establisment failed": "Verbindungsaufbau zum Node fehlgeschlagen",
+            "Sync request failed": "Sync-Anfrage fehlgeschlagen",
+            "Remote got no identity": "Node hat keine Identität übermittelt",
+            "Node rejected request": "Node hat Sync-Anfrage abgelehnt",
+            "Sync failed": "Synchronisierung fehlgeschlagen",
+            "Done, no new messages": "Sync abgeschlossen (keine neuen Nachrichten)",
+        }
+        if status in translations:
+            return translations[status]
+        if status and status.startswith("Downloaded "):
+            parts = status.split()
+            count = parts[1] if len(parts) > 1 else ""
+            return f"Sync abgeschlossen: {count} neue Nachricht(en) empfangen!"
+        return status or "Unbekannt"
+
+    def get_sync_progress(self) -> float:
+        if not self.app:
+            return 0.0
+        try:
+            return self.app.get_sync_progress()
+        except Exception:
+            return 0.0
 
     def shutdown(self):
         """Clean shutdown of background threads and NomadNet."""

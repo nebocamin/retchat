@@ -91,9 +91,10 @@ class ChatView(Gtk.Box):
     def _build_menu(self):
         from gi.repository import Gio
         menu_model = Gio.Menu()
-        menu_model.append("Ziel-Hash kopieren", "win.copy_hash")
-        menu_model.append("Kontakt umbenennen", "win.rename")
+        menu_model.append("Sync", "win.sync")
         menu_model.append("Pfad im Mesh anfragen", "win.request_path")
+        menu_model.append("Kontakt umbenennen", "win.rename")
+        menu_model.append("Ziel-Hash kopieren", "win.copy_hash")
         self.menu_btn.set_menu_model(menu_model)
 
     def set_back_button_visible(self, visible: bool):

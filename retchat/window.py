@@ -1,5 +1,6 @@
 """Main Application Window for Retchat."""
 
+import time
 from typing import Any, Dict, List, Optional
 
 import gi
@@ -94,6 +95,12 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_path.connect("activate", lambda _a, _p: self._action_request_path())
         self.action_path.set_enabled(False)
         self.add_action(self.action_path)
+
+        # Action: Sync (win.sync)
+        self.action_sync = Gio.SimpleAction.new("sync", None)
+        self.action_sync.connect("activate", lambda _a, _p: self._action_sync())
+        self.action_sync.set_enabled(False)
+        self.add_action(self.action_sync)
 
         # Action: Announce (win.announce)
         self.action_announce = Gio.SimpleAction.new("announce", None)
@@ -299,6 +306,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_copy.set_enabled(True)
         self.action_rename.set_enabled(True)
         self.action_path.set_enabled(True)
+        self.action_sync.set_enabled(True)
         self.service.mark_read(dest_hash)
 
         # Update row badge
@@ -524,6 +532,53 @@ class RetchatWindow(Adw.ApplicationWindow):
                     self.chat_view.update_header(conv)
 
         self.service.request_path(dest_hex, callback=on_path_result)
+
+    def _action_sync(self):
+        if not self.current_dest_hash:
+            return
+        dest_hex = self.current_dest_hash
+        success, msg = self.service.request_sync(target_node=dest_hex)
+        self._show_toast(msg)
+        if not success:
+            return
+
+        # Poll sync status periodically until finished
+        start_time = time.time()
+        last_status = [msg]
+
+        def _check_sync_progress():
+            if time.time() - start_time > 45:
+                return False
+
+            status_raw = self.service.app.get_sync_status() if self.service and self.service.app else "Idle"
+            status_text = self.service.get_sync_status_text()
+
+            if status_text != last_status[0]:
+                last_status[0] = status_text
+                if status_raw not in ("Idle", "Path requested"):
+                    self._show_toast(status_text)
+
+            finished_states = (
+                "Done, no new messages",
+                "Sync failed",
+                "No path to node",
+                "Link establisment failed",
+                "Sync request failed",
+                "Node rejected request",
+                "Remote got no identity",
+            )
+            if status_raw in finished_states or (status_raw and status_raw.startswith("Downloaded ")):
+                self._load_conversations()
+                if self.current_dest_hash:
+                    conv = self.service.get_conversation(self.current_dest_hash)
+                    messages = self.service.get_messages(self.current_dest_hash)
+                    if conv:
+                        self.chat_view.load_conversation(conv, messages)
+                return False
+
+            return True
+
+        GLib.timeout_add(1500, _check_sync_progress)
 
     def _action_announce_self(self):
         try:
