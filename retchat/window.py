@@ -61,14 +61,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.toast_overlay.set_child(self.split_view)
         self.set_content(self.toast_overlay)
 
-        # Bind collapsed state to ChatView back button
-        self.split_view.bind_property(
-            "collapsed",
-            self.chat_view.back_btn,
-            "visible",
-            GObject.BindingFlags.SYNC_CREATE
-        )
-
         # Setup GActions for window
         self._setup_actions()
 
@@ -156,9 +148,10 @@ class RetchatWindow(Adw.ApplicationWindow):
         stack_switcher.set_margin_top(4)
         stack_switcher.set_margin_bottom(6)
 
-        sidebar_stack = Gtk.Stack()
-        sidebar_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
-        stack_switcher.set_stack(sidebar_stack)
+        self.sidebar_stack = Gtk.Stack()
+        self.sidebar_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        self.sidebar_stack.connect("notify::visible-child-name", self._on_sidebar_tab_changed)
+        stack_switcher.set_stack(self.sidebar_stack)
         sidebar_box.append(stack_switcher)
 
         # Tab 1: Chats
@@ -178,7 +171,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.conv_list_box.set_placeholder(self.conv_empty_page)
 
         conv_scroll.set_child(self.conv_list_box)
-        sidebar_stack.add_titled(conv_scroll, "chats", "Chats")
+        self.sidebar_stack.add_titled(conv_scroll, "chats", "Chats")
 
         # Tab 2: Entdecken (Mesh Peers)
         announce_scroll = Gtk.ScrolledWindow()
@@ -195,18 +188,18 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.announce_empty_page.set_description(
             "Sobald Teilnehmer im Reticulum-Netzwerk ein Announce senden, erscheinen sie hier."
         )
-        empty_announce_btn = Gtk.Button(label="Selbst im Mesh ankündigen")
-        empty_announce_btn.add_css_class("suggested-action")
-        empty_announce_btn.add_css_class("pill")
-        empty_announce_btn.set_halign(Gtk.Align.CENTER)
-        empty_announce_btn.connect("clicked", lambda _b: self._action_announce_self())
-        self.announce_empty_page.set_child(empty_announce_btn)
+        self.empty_announce_btn = Gtk.Button(label="Selbst im Mesh ankündigen")
+        self.empty_announce_btn.add_css_class("suggested-action")
+        self.empty_announce_btn.add_css_class("pill")
+        self.empty_announce_btn.set_halign(Gtk.Align.CENTER)
+        self.empty_announce_btn.connect("clicked", lambda _b: self._action_announce_self())
+        self.announce_empty_page.set_child(self.empty_announce_btn)
         self.announce_list_box.set_placeholder(self.announce_empty_page)
 
         announce_scroll.set_child(self.announce_list_box)
-        sidebar_stack.add_titled(announce_scroll, "discover", "Entdecken")
+        self.sidebar_stack.add_titled(announce_scroll, "discover", "Entdecken")
 
-        sidebar_box.append(sidebar_stack)
+        sidebar_box.append(self.sidebar_stack)
         return sidebar_box
 
     def _build_content(self) -> Gtk.Widget:
@@ -265,6 +258,13 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.conv_list_box.remove(child)
         self.conv_rows.clear()
 
+        if query:
+            self.conv_empty_page.set_title("Keine Chats gefunden")
+            self.conv_empty_page.set_description(f"Keine Chats gefunden für «{query}».")
+        else:
+            self.conv_empty_page.set_title("Keine Chats")
+            self.conv_empty_page.set_description("Starte einen Chat über das '+' Symbol oben.")
+
         for conv in conversations:
             row = ConversationRow(conv)
             self.conv_rows[conv["destination_hash"]] = row
@@ -272,7 +272,21 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_search_changed(self, entry: Gtk.SearchEntry):
         q = entry.get_text().strip()
-        self._load_conversations(query=q if q else None)
+        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
+        if active_tab == "discover":
+            self._load_announces(query=q if q else None)
+        else:
+            self._load_conversations(query=q if q else None)
+
+    def _on_sidebar_tab_changed(self, stack: Gtk.Stack, _pspec):
+        active_tab = stack.get_visible_child_name()
+        q = self.search_entry.get_text().strip()
+        if active_tab == "discover":
+            self.search_entry.set_placeholder_text("Peers & Ankündigungen durchsuchen...")
+            self._load_announces(query=q if q else None)
+        else:
+            self.search_entry.set_placeholder_text("Chats durchsuchen...")
+            self._load_conversations(query=q if q else None)
 
     def _on_conv_selected(self, _list_box, row: Optional[ConversationRow]):
         if row is None:
@@ -309,11 +323,24 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.split_view.set_show_content(False)
 
     # --- Announce Discovery Management ---
-    def _load_announces(self):
-        announces = self.db.get_announces()
+    def _load_announces(self, query: Optional[str] = None):
+        announces = self.db.get_announces(query=query)
         while child := self.announce_list_box.get_first_child():
             self.announce_list_box.remove(child)
         self.announce_rows.clear()
+
+        if query:
+            self.announce_empty_page.set_title("Keine Peers gefunden")
+            self.announce_empty_page.set_description(f"Keine Ankündigungen gefunden für «{query}».")
+            if hasattr(self, "empty_announce_btn"):
+                self.empty_announce_btn.set_visible(False)
+        else:
+            self.announce_empty_page.set_title("Warte auf Mesh-Peers...")
+            self.announce_empty_page.set_description(
+                "Sobald Teilnehmer im Reticulum-Netzwerk ein Announce senden, erscheinen sie hier."
+            )
+            if hasattr(self, "empty_announce_btn"):
+                self.empty_announce_btn.set_visible(True)
 
         for ann in announces:
             row = AnnounceRow(ann, on_start_chat=self._on_announce_start_chat)
@@ -370,12 +397,17 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_service_announce_received(self, announce_data: Dict[str, Any]):
         dest_hash = announce_data["destination_hash"].lower()
-        if dest_hash in self.announce_rows:
-            self.announce_rows[dest_hash].update_data(announce_data)
+        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
+        q = self.search_entry.get_text().strip()
+        if active_tab == "discover" and q:
+            self._load_announces(query=q)
         else:
-            row = AnnounceRow(announce_data, on_start_chat=self._on_announce_start_chat)
-            self.announce_rows[dest_hash] = row
-            self.announce_list_box.prepend(row)
+            if dest_hash in self.announce_rows:
+                self.announce_rows[dest_hash].update_data(announce_data)
+            else:
+                row = AnnounceRow(announce_data, on_start_chat=self._on_announce_start_chat)
+                self.announce_rows[dest_hash] = row
+                self.announce_list_box.prepend(row)
 
     def _on_service_path_resolved(self, dest_hex: str, hops: int):
         dest_hex = dest_hex.lower()

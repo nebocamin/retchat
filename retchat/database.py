@@ -303,11 +303,23 @@ class Database:
             """, (dest_hash, identity_hash, display_name, hops, aspect, receiving_interface, last_seen))
             conn.commit()
 
-    def get_announces(self, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_announces(self, query: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         with self._get_conn() as conn:
-            rows = conn.execute("""
-                SELECT * FROM announces
-                ORDER BY last_seen DESC
-                LIMIT ?
-            """, (limit,)).fetchall()
+            if query:
+                q = f"%{query.strip().lower()}%"
+                rows = conn.execute("""
+                    SELECT * FROM announces
+                    WHERE lower(destination_hash) LIKE ?
+                       OR lower(COALESCE(display_name, '')) LIKE ?
+                       OR lower(COALESCE(identity_hash, '')) LIKE ?
+                       OR lower(COALESCE(receiving_interface, '')) LIKE ?
+                    ORDER BY last_seen DESC
+                    LIMIT ?
+                """, (q, q, q, q, limit)).fetchall()
+            else:
+                rows = conn.execute("""
+                    SELECT * FROM announces
+                    ORDER BY last_seen DESC
+                    LIMIT ?
+                """, (limit,)).fetchall()
             return [dict(r) for r in rows]

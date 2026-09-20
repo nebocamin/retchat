@@ -31,15 +31,9 @@ class ChatView(Gtk.Box):
         self.current_conv_data: Optional[Dict[str, Any]] = None
         self.bubble_widgets: Dict[str, MessageBubble] = {}
 
-        # 1. Header Bar
+        # 1. Header Bar (Adw.HeaderBar automatically provides back button in collapsed mode)
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
-
-        # Back button (for collapsed navigation)
-        self.back_btn = Gtk.Button(icon_name="go-previous-symbolic")
-        self.back_btn.set_tooltip_text("Zurück")
-        self.back_btn.connect("clicked", lambda _b: self.on_back_clicked())
-        self.header_bar.pack_start(self.back_btn)
 
         # Window Title
         self.window_title = Adw.WindowTitle(title="Chat", subtitle="")
@@ -103,7 +97,7 @@ class ChatView(Gtk.Box):
         self.menu_btn.set_menu_model(menu_model)
 
     def set_back_button_visible(self, visible: bool):
-        self.back_btn.set_visible(visible)
+        self.header_bar.set_show_back_button(visible)
 
     def update_header(self, conv_data: Optional[Dict[str, Any]] = None):
         if conv_data:
