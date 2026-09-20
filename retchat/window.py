@@ -676,25 +676,6 @@ class RetchatWindow(Adw.ApplicationWindow):
             success, msg = self.service.send_rrc_message(hub_hash, room_name, text)
             if not success:
                 self._show_toast(msg)
-            else:
-                messages = self.service.get_rrc_messages(hub_hash, room_name)
-                members = self.service.get_rrc_members(hub_hash, room_name)
-                hubs = self.service.get_rrc_hubs()
-                hub_name = hub_hash[:8]
-                status_text = "Verbunden"
-                for h in hubs:
-                    if h["hash"].lower() == hub_hash.lower():
-                        hub_name = h["name"]
-                        status_text = h["status_text"]
-                        break
-                self.relay_chat_view.load_room(
-                    hub_hash=hub_hash,
-                    room_name=room_name,
-                    hub_name=hub_name,
-                    status_text=status_text,
-                    messages=messages,
-                    members=members
-                )
         except Exception as e:
             self._show_toast(f"Fehler: {e}")
 

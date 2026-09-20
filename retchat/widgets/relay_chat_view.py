@@ -52,6 +52,7 @@ class RelayChatView(Gtk.Box):
         self.current_hub_hash: Optional[str] = None
         self.current_room: Optional[str] = None
         self.current_hub_name: str = ""
+        self._displayed_keys: set = set()
 
         # 1. Header Bar (Adw.HeaderBar automatically provides back button in collapsed mode)
         self.header_bar = Adw.HeaderBar()
@@ -217,6 +218,7 @@ class RelayChatView(Gtk.Box):
 
         while child := self.messages_box.get_first_child():
             self.messages_box.remove(child)
+        self._displayed_keys.clear()
 
         for msg in messages:
             self.add_message(msg, scroll_to_bottom=False)
@@ -331,8 +333,17 @@ class RelayChatView(Gtk.Box):
     def add_message(self, msg_data: Dict[str, Any], scroll_to_bottom: bool = True):
         kind = msg_data.get("kind", "msg")
         text = msg_data.get("text", "")
-        nick = msg_data.get("nick") or "System"
+        src = msg_data.get("src", "")
         ts = msg_data.get("timestamp", time.time())
+
+        # Deduplication check (ignoring sub-second differences)
+        ts_sec = round(float(ts))
+        msg_key = (kind, src, text, ts_sec)
+        if msg_key in self._displayed_keys:
+            return
+        self._displayed_keys.add(msg_key)
+
+        nick = msg_data.get("nick") or "System"
         is_me = bool(msg_data.get("is_me", False))
 
         time_str = datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
