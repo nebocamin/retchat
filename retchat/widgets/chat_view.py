@@ -68,11 +68,12 @@ class ChatView(Gtk.Box):
         self.composer_box.add_css_class("composer-bar")
         self.composer_box.set_margin_top(8)
         self.composer_box.set_margin_bottom(12)
-        self.composer_box.set_margin_start(16)
-        self.composer_box.set_margin_end(16)
+        self.composer_box.set_margin_start(10)
+        self.composer_box.set_margin_end(10)
 
         # Text Entry
         self.entry = Gtk.Entry()
+        self.entry.set_width_chars(1)
         self.entry.set_placeholder_text("Nachricht über Reticulum verfassen...")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)

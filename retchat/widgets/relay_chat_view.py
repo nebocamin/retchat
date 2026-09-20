@@ -87,8 +87,8 @@ class RelayChatView(Gtk.Box):
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.messages_box.set_margin_top(12)
         self.messages_box.set_margin_bottom(12)
-        self.messages_box.set_margin_start(16)
-        self.messages_box.set_margin_end(16)
+        self.messages_box.set_margin_start(10)
+        self.messages_box.set_margin_end(10)
         self.messages_box.set_vexpand(True)
         self.scrolled_window.set_child(self.messages_box)
 
@@ -99,10 +99,11 @@ class RelayChatView(Gtk.Box):
         self.composer_box.add_css_class("composer-bar")
         self.composer_box.set_margin_top(8)
         self.composer_box.set_margin_bottom(12)
-        self.composer_box.set_margin_start(16)
-        self.composer_box.set_margin_end(16)
+        self.composer_box.set_margin_start(10)
+        self.composer_box.set_margin_end(10)
 
         self.entry = Gtk.Entry()
+        self.entry.set_width_chars(1)
         self.entry.set_placeholder_text("Nachricht schreiben (oder /me, /who, /part)...")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
@@ -175,6 +176,7 @@ class RelayChatView(Gtk.Box):
 
             color = get_nick_color(nick)
             nick_lbl = Gtk.Label(xalign=0.0)
+            nick_lbl.set_ellipsize(Pango.EllipsizeMode.END)
             nick_lbl.set_markup(f"<span foreground='{color}' weight='bold'>{escape(nick)}</span>")
             nick_lbl.set_hexpand(True)
             row_box.append(nick_lbl)
@@ -201,8 +203,15 @@ class RelayChatView(Gtk.Box):
             notice_box.set_halign(Gtk.Align.CENTER)
             notice_box.set_margin_top(4)
             notice_box.set_margin_bottom(4)
+            notice_box.set_margin_start(4)
+            notice_box.set_margin_end(4)
 
-            notice_label = Gtk.Label(xalign=0.5)
+            notice_label = Gtk.Label(
+                xalign=0.5,
+                justify=Gtk.Justification.CENTER,
+                wrap=True,
+                wrap_mode=Pango.WrapMode.WORD_CHAR
+            )
             notice_label.add_css_class("dim-label")
             notice_label.set_markup(f"<small>— {escape(text)} ({time_str}) —</small>")
             notice_box.append(notice_label)
@@ -214,10 +223,16 @@ class RelayChatView(Gtk.Box):
             action_box.set_halign(Gtk.Align.START if not is_me else Gtk.Align.END)
             action_box.set_margin_top(3)
             action_box.set_margin_bottom(3)
+            action_box.set_margin_start(4)
+            action_box.set_margin_end(4)
 
             color = get_nick_color(nick)
-            action_label = Gtk.Label(xalign=0.0)
-            action_label.set_markup(f"<i>* <span foreground='{color}' weight='bold'>{escape(nick)}</span> {escape(text)}</i> <small class='dim-label'>{time_str}</small>")
+            action_label = Gtk.Label(
+                xalign=0.0,
+                wrap=True,
+                wrap_mode=Pango.WrapMode.WORD_CHAR
+            )
+            action_label.set_markup(f"<i>* <span foreground='{color}' weight='bold'>{escape(nick)}</span> {escape(text)}</i> <span alpha='65%' size='small'>{time_str}</span>")
             action_box.append(action_label)
             self.messages_box.append(action_box)
 
@@ -240,6 +255,7 @@ class RelayChatView(Gtk.Box):
                 # Sender nick header for incoming messages in group chat
                 color = get_nick_color(nick)
                 nick_label = Gtk.Label(xalign=0.0)
+                nick_label.set_ellipsize(Pango.EllipsizeMode.END)
                 nick_label.set_markup(f"<span foreground='{color}' weight='bold'><small>{escape(nick)}</small></span>")
                 bubble.append(nick_label)
 
