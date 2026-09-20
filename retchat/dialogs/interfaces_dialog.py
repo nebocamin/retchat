@@ -27,6 +27,7 @@ class InterfacesDialog(_BaseDialog):
         self.service = service
         self.set_title("Schnittstellen & Reticulum Status")
         self.set_size_request(300, 360)
+        self.live_rows: List[Adw.ActionRow] = []
 
         self.page = Adw.PreferencesPage()
 
@@ -167,10 +168,18 @@ class InterfacesDialog(_BaseDialog):
             badge.add_css_class("unread-badge")
 
     def _refresh_live_stats(self):
+        for row in self.live_rows:
+            try:
+                self.group_live.remove(row)
+            except Exception:
+                pass
+        self.live_rows.clear()
+
         interfaces = self.service.get_interfaces_info()
         if not interfaces:
-            row = Adw.ActionRow(title="Keine aktiven Verbindungen")
-            self.group_live.add(row)
+            empty_row = Adw.ActionRow(title="Keine aktiven Verbindungen")
+            self.group_live.add(empty_row)
+            self.live_rows.append(empty_row)
             return
 
         for iface in interfaces:
@@ -192,6 +201,7 @@ class InterfacesDialog(_BaseDialog):
                 status_label.add_css_class("dim-label")
             row.add_suffix(status_label)
             self.group_live.add(row)
+            self.live_rows.append(row)
 
     def _on_save_tcp_clicked(self, _btn):
         host = self.tcp_host_row.get_text().strip() or "sideband.connect.reticulum.network"
