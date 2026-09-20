@@ -69,6 +69,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.add_message_state_callback(self._on_service_message_state)
         self.service.add_announce_callback(self._on_service_announce_received)
         self.service.add_path_resolved_callback(self._on_service_path_resolved)
+        self.service.add_conversations_changed_callback(self._on_service_conversations_changed)
 
         # Initial data loading
         self._ensure_default_contact()
@@ -240,18 +241,11 @@ class RetchatWindow(Adw.ApplicationWindow):
     def _ensure_default_contact(self):
         """Pre-populate the user's specified contact if not present."""
         test_contact_hash = "8d883cfe6c1a846d8f34e5a95a149fdb"
-        existing = self.db.get_conversation(test_contact_hash)
-        if not existing:
-            self.db.add_or_update_conversation(
-                dest_hash=test_contact_hash,
-                custom_name="Test-Kontakt",
-                display_name="Reticulum Gegenstelle",
-                hops=1
-            )
+        self.service.start_conversation(test_contact_hash)
 
     # --- Conversation List Management ---
     def _load_conversations(self, query: Optional[str] = None):
-        conversations = self.db.get_conversations(query=query)
+        conversations = self.service.get_conversations(query=query)
 
         # Clear existing rows
         while child := self.conv_list_box.get_first_child():
@@ -296,15 +290,16 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def open_conversation(self, dest_hash: str):
         dest_hash = dest_hash.lower()
-        conv = self.db.get_conversation(dest_hash)
+        conv = self.service.get_conversation(dest_hash)
         if not conv:
-            conv = self.db.add_or_update_conversation(dest_hash=dest_hash)
+            self.service.start_conversation(dest_hash)
+            conv = self.service.get_conversation(dest_hash)
 
         self.current_dest_hash = dest_hash
         self.action_copy.set_enabled(True)
         self.action_rename.set_enabled(True)
         self.action_path.set_enabled(True)
-        self.db.clear_unread_count(dest_hash)
+        self.service.mark_read(dest_hash)
 
         # Update row badge
         if dest_hash in self.conv_rows:
@@ -312,7 +307,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.conv_rows[dest_hash].update_data(conv)
 
         # Load messages
-        messages = self.db.get_messages(dest_hash)
+        messages = self.service.get_messages(dest_hash)
         self.chat_view.load_conversation(conv, messages)
         self.content_stack.set_visible_child_name("chat")
 
@@ -324,7 +319,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     # --- Announce Discovery Management ---
     def _load_announces(self, query: Optional[str] = None):
-        announces = self.db.get_announces(query=query)
+        announces = self.service.get_announces(query=query)
         while child := self.announce_list_box.get_first_child():
             self.announce_list_box.remove(child)
         self.announce_rows.clear()
@@ -348,8 +343,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.announce_list_box.append(row)
 
     def _on_announce_start_chat(self, dest_hash: str, display_name: str):
-        # Create or update conversation and open it
-        self.db.add_or_update_conversation(dest_hash=dest_hash, display_name=display_name)
+        self.service.start_conversation(dest_hash)
         self._load_conversations()
         self.open_conversation(dest_hash)
 
@@ -365,7 +359,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self._show_toast(f"Fehler beim Senden: {e}")
 
     def _update_or_add_conv_row(self, dest_hash: str):
-        conv = self.db.get_conversation(dest_hash)
+        conv = self.service.get_conversation(dest_hash)
         if not conv:
             return
 
@@ -386,9 +380,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         # If currently viewing this chat, append message
         if self.current_dest_hash and self.current_dest_hash == sender:
             self.chat_view.append_message(msg_data)
-            self.db.clear_unread_count(sender)
+            self.service.mark_read(sender)
             if sender in self.conv_rows:
-                conv = self.db.get_conversation(sender)
+                conv = self.service.get_conversation(sender)
                 if conv:
                     self.conv_rows[sender].update_data(conv)
 
@@ -411,7 +405,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_service_path_resolved(self, dest_hex: str, hops: int):
         dest_hex = dest_hex.lower()
-        conv = self.db.get_conversation(dest_hex)
+        conv = self.service.get_conversation(dest_hex)
         if not conv:
             return
         if dest_hex in self.conv_rows:
@@ -419,13 +413,22 @@ class RetchatWindow(Adw.ApplicationWindow):
         if self.current_dest_hash == dest_hex:
             self.chat_view.update_header(conv)
 
+    def _on_service_conversations_changed(self):
+        q = self.search_entry.get_text().strip() if hasattr(self, "search_entry") else None
+        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
+        if active_tab == "chats":
+            self._load_conversations(query=q if q else None)
+
     # --- Dialog Openers ---
     def _show_new_chat_dialog(self):
         dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created)
         dialog.present()
 
     def _on_new_chat_created(self, dest_hash: str, nickname: Optional[str]):
-        self.db.add_or_update_conversation(dest_hash=dest_hash, custom_name=nickname)
+        dest_hash = dest_hash.lower()
+        self.service.start_conversation(dest_hash)
+        if nickname:
+            self.service.set_custom_name(dest_hash, nickname)
         self._load_conversations()
         self.open_conversation(dest_hash)
 
@@ -455,7 +458,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         if not self.current_dest_hash:
             return
         dest_hash = self.current_dest_hash
-        conv = self.db.get_conversation(dest_hash)
+        conv = self.service.get_conversation(dest_hash)
         current_name = (conv.get("custom_name") or conv.get("display_name") or "") if conv else ""
 
         dialog = Adw.AlertDialog(
@@ -479,9 +482,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         def on_response(dlg, response):
             if response == "save":
                 new_name = entry.get_text().strip()
-                self.db.set_custom_name(dest_hash, new_name if new_name else None)
+                self.service.set_custom_name(dest_hash, new_name if new_name else None)
                 self._load_conversations()
-                updated_conv = self.db.get_conversation(dest_hash)
+                updated_conv = self.service.get_conversation(dest_hash)
                 if updated_conv and hasattr(self.chat_view, "update_header"):
                     self.chat_view.update_header(updated_conv)
                 if new_name:
@@ -513,7 +516,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             else:
                 self._show_toast(f"Keine Antwort für {short_hash} (Ziel evtl. offline)")
 
-            conv = self.db.get_conversation(target_hex)
+            conv = self.service.get_conversation(target_hex)
             if conv:
                 if target_hex in self.conv_rows:
                     self.conv_rows[target_hex].update_data(conv)

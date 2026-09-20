@@ -20,7 +20,8 @@ def main():
     os.makedirs(WHEELS_DIR, exist_ok=True)
     pkgs = [
         "rns", "lxmf", "msgpack", "cryptography",
-        "pyserial", "cffi", "pycparser", "setuptools", "wheel"
+        "pyserial", "cffi", "pycparser", "setuptools", "wheel",
+        "nomadnet", "qrcode", "urwid", "wcwidth"
     ]
     subprocess.run([
         "pip", "download",

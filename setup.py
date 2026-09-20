@@ -14,6 +14,8 @@ setup(
         "rns>=1.5.0",
         "lxmf>=1.1.0",
         "msgpack",
+        "nomadnet>=1.4.0",
+        "qrcode>=8.0",
     ],
     entry_points={
         "gui_scripts": [

@@ -197,11 +197,28 @@ class Database:
     def set_custom_name(self, dest_hash: str, custom_name: Optional[str]):
         dest_hash = dest_hash.lower()
         with self._get_conn() as conn:
-            conn.execute(
-                "UPDATE conversations SET custom_name = ? WHERE destination_hash = ?",
-                (custom_name, dest_hash)
-            )
+            conn.execute("""
+                INSERT INTO conversations (destination_hash, custom_name, created_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(destination_hash) DO UPDATE SET custom_name = excluded.custom_name
+            """, (dest_hash, custom_name, time.time()))
             conn.commit()
+
+    def get_custom_name(self, dest_hash: str) -> Optional[str]:
+        dest_hash = dest_hash.lower()
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT custom_name FROM conversations WHERE destination_hash = ?",
+                (dest_hash,)
+            ).fetchone()
+            return row["custom_name"] if row and row["custom_name"] else None
+
+    def get_all_custom_names(self) -> Dict[str, str]:
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT destination_hash, custom_name FROM conversations WHERE custom_name IS NOT NULL AND custom_name != ''"
+            ).fetchall()
+            return {row["destination_hash"]: row["custom_name"] for row in rows}
 
     def delete_conversation(self, dest_hash: str):
         dest_hash = dest_hash.lower()
