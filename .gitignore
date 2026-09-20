@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 *.log
+.flatpak-build/
+.flatpak-repo/
+.flatpak-builder/
+*.flatpak
+build/
+dist/
+*.egg-info/

@@ -26,7 +26,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service = service
 
         self.set_title("Retchat")
-        self.set_default_size(960, 680)
+        self.set_default_size(860, 640)
+        self.set_size_request(300, 360)
 
         self.current_dest_hash: Optional[str] = None
         self.conv_rows: Dict[str, ConversationRow] = {}
@@ -37,7 +38,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         # Split View (Sidebar + Content)
         self.split_view = Adw.NavigationSplitView()
-        self.split_view.set_min_sidebar_width(300)
+        self.split_view.set_min_sidebar_width(240)
         self.split_view.set_max_sidebar_width(380)
 
         # Build Sidebar and Content
@@ -49,6 +50,13 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         self.split_view.set_sidebar(sidebar_page)
         self.split_view.set_content(content_page)
+
+        # Mobile Breakpoint (e.g. for Phosh / PostmarketOS or narrow screens)
+        breakpoint = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse("max-width: 680px")
+        )
+        breakpoint.add_setter(self.split_view, "collapsed", True)
+        self.add_breakpoint(breakpoint)
 
         self.toast_overlay.set_child(self.split_view)
         self.set_content(self.toast_overlay)

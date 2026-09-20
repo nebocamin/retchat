@@ -17,7 +17,8 @@ class ProfileDialog(Adw.PreferencesWindow):
         self.service = service
         self.on_profile_updated = on_profile_updated
         self.set_title("Eigene Identität & Profil")
-        self.set_default_size(520, 500)
+        self.set_default_size(360, 520)
+        self.set_size_request(280, 360)
 
         page = Adw.PreferencesPage()
 

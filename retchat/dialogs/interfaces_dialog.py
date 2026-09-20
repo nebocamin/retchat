@@ -16,7 +16,8 @@ class InterfacesDialog(Adw.PreferencesWindow):
 
         self.service = service
         self.set_title("Reticulum Schnittstellen & Status")
-        self.set_default_size(540, 520)
+        self.set_default_size(360, 520)
+        self.set_size_request(280, 360)
 
         self.page = Adw.PreferencesPage()
         self.group = Adw.PreferencesGroup()

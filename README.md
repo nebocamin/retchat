@@ -1,6 +1,6 @@
 # Retchat
 
-**Retchat** ist ein moderner Desktop-Chat-Client für das [Reticulum Network](https://reticulum.network/) im **GTK4 + Libadwaita**-Stil (inspiriert von der Android-App [Columba](https://github.com/torlando-tech/columba)).
+**Retchat** ist ein moderner Desktop- und Mobile-Chat-Client für das [Reticulum Network](https://reticulum.network/) im **GTK4 + Libadwaita**-Stil (inspiriert von der Android-App [Columba](https://github.com/torlando-tech/columba)).
 
 Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über das Reticulum-Mesh-Netzwerk per [LXMF](https://github.com/markqvist/LXMF) (Lightweight Extensible Message Format) chatten – über WLAN, TCP-Verbindungen, LoRa-Funk (RNode) und lokale Interfaces.
 
@@ -8,10 +8,14 @@ Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über
 
 ## Highlights & Features
 
+- 📱 **Phosh & PostmarketOS Mobile-optimiert**:
+  - Dank `Adw.Breakpoint` passt sich die App automatisch an schmale Bildschirme (360x720px PinePhone, Librem 5 usw.) an.
+  - Das Fenster lässt sich flexibel bis auf 300px Breite verkleinern.
+  - Auf Telefonen klappt die Ansicht in eine intuitive Einzelansicht (Seitenleiste ↔ Chat) mit automatischem Zurück-Button um.
 - 🎨 **Modernes GNOME / Libadwaita HIG Design**:
-  - Responsives `Adw.NavigationSplitView` (funktioniert auf großen Monitoren genauso wie auf schmalen Fenstern oder Mobilgeräten).
-  - Moderne Sprechblasen für gesendete und empfangene Nachrichten mit automatischer Anpassung an Light- und Dark-Themes.
-  - Avatare mit Initialen, Zeitstempeln und Hop-Anzeige.
+  - Responsives `Adw.NavigationSplitView`.
+  - Sprechblasen mit nativer Light- und Dark-Theme-Anpassung.
+  - Avatare mit Initialen, Zeitstempeln und Hop-Zählern.
 - 📬 **LXMF-Nachrichtenversand & Empfangsbestätigungen**:
   - Live-Zustellungsstatus (`🕒 Wird gesendet` ➔ `✓ Gesendet` ➔ `✓✓ Zugestellt` ➔ `❌ Fehlgeschlagen`).
   - Schneller Nachrichtenversand per Enter-Taste.
@@ -32,46 +36,63 @@ Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über
 
 ---
 
-## Screenshots & Struktur
+## Installation & Ausführung
 
-```text
-retchat/
-├── main.py                  # Haupteinstiegspunkt
-├── retchat.sh               # Ausführbares Start-Skript
-├── retchat.desktop          # Desktop-Starter
-├── retchat.svg              # Anwendungs-Icon
-├── retchat/
-│   ├── app.py               # Adw.Application Lebenszyklus & CSS-Lader
-│   ├── window.py            # Hauptfenster (NavigationSplitView, Header, Listen)
-│   ├── database.py          # SQLite-Speicher (Unterhaltungen, Nachrichten, Announces)
-│   ├── reticulum_service.py # Reticulum & LXMF-Service, Dispatcher & Callbacks
-│   ├── style.css            # Libadwaita-CSS (Chat-Bubbles, Badges, Composer)
-│   ├── widgets/
-│   │   ├── chat_view.py     # Chat-Verlauf & Eingabeleiste
-│   │   ├── message_bubble.py# Sprechblasen-Widget mit Status-Symbolen
-│   │   ├── conversation_row.py # Zeile in der Unterhaltungsliste
-│   │   └── announce_row.py  # Zeile in der Mesh-Entdeckungsliste
-│   └── dialogs/
-│       ├── new_chat_dialog.py  # Neuer Chat (Hash-Eingabe mit Validierung)
-│       ├── profile_dialog.py   # Eigenes Profil & Announce
-│       └── interfaces_dialog.py# Reticulum Interface-Status
+### 1. Als Flatpak (Empfohlen für postmarketOS / Phosh)
+
+Das fertige Flatpak-Bundle `retchat.flatpak` befindet sich im Projektverzeichnis und kann direkt auf jedem Linux- oder postmarketOS-Gerät installiert werden:
+
+```bash
+flatpak install --user retchat.flatpak
 ```
 
----
+Zum erneuten Erstellen des Flatpaks:
+```bash
+./build-flatpak.sh
+```
 
-## Starten der Anwendung
-
-### Direkt über das Startskript
+### 2. Direkt über das Startskript (Desktop / Entwicklung)
 ```bash
 ./retchat.sh
 ```
 
-### Über den Desktop-Starter
-Retchat ist im Anwendungsmenü unter dem Namen **Retchat** registriert.
+---
+
+## Projektstruktur
+
+```text
+retchat/
+├── org.selfmade.Retchat.json     # Flatpak-Manifest
+├── build-flatpak.sh              # Automatisches Flatpak-Build-Skript
+├── retchat.flatpak               # Fertiges Flatpak-Bundle (5.1 MB)
+├── org.selfmade.Retchat.metainfo.xml # AppStream Metadaten
+├── org.selfmade.Retchat.desktop  # Desktop-Starter mit FormFactor-Unterstützung
+├── setup.py                      # Python Package Definition
+├── main.py                       # Haupteinstiegspunkt
+├── retchat.sh                    # Lokales Ausführskript
+├── retchat.svg                   # Anwendungs-Icon
+├── retchat/
+│   ├── app.py                    # Adw.Application Lebenszyklus & CSS-Lader
+│   ├── window.py                 # Hauptfenster (NavigationSplitView, Breakpoints)
+│   ├── database.py               # SQLite-Speicher (Unterhaltungen, Nachrichten, Announces)
+│   ├── reticulum_service.py      # Reticulum & LXMF-Service, Dispatcher & Callbacks
+│   ├── style.css                 # Libadwaita-CSS (Chat-Bubbles, Badges, Composer)
+│   ├── widgets/
+│   │   ├── chat_view.py          # Chat-Verlauf & Eingabeleiste
+│   │   ├── message_bubble.py     # Sprechblasen-Widget mit Status-Symbolen
+│   │   ├── conversation_row.py   # Zeile in der Unterhaltungsliste
+│   │   └── announce_row.py       # Zeile in der Mesh-Entdeckungsliste
+│   └── dialogs/
+│       ├── new_chat_dialog.py    # Neuer Chat (Hash-Eingabe mit Validierung)
+│       ├── profile_dialog.py     # Eigenes Profil & Announce
+│       └── interfaces_dialog.py  # Reticulum Interface-Status
+```
 
 ---
 
 ## Getestet mit
+- Phosh Mobile Breakpoint (bis 300px Fensterbreite verkleinerbar)
+- Flatpak Runtime `org.gnome.Platform//50`
 - Kontakt `8d883cfe6c1a846d8f34e5a95a149fdb`
 - Reticulum 1.5.4
 - LXMF 1.1.1

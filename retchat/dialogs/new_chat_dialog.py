@@ -14,8 +14,9 @@ class NewChatDialog(Adw.Window):
 
         self.on_chat_created = on_chat_created
         self.set_title("Neuer Reticulum Chat")
-        self.set_default_size(440, 360)
-        self.set_resizable(False)
+        self.set_default_size(360, 360)
+        self.set_size_request(280, 320)
+        self.set_resizable(True)
 
         main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
 
