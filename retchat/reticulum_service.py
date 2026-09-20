@@ -981,6 +981,54 @@ class ReticulumService:
     # ------------------------------------------------------------------ #
     # LXMF Propagation Node Sync
     # ------------------------------------------------------------------ #
+    def get_propagation_node_info(self) -> Dict[str, Any]:
+        """Get propagation node configuration and current active node."""
+        if not self.app:
+            return {"configured": "", "active": "", "is_auto": True}
+
+        user_node = self.app.get_user_selected_propagation_node()
+        default_node = self.app.get_default_propagation_node()
+
+        configured_hex = user_node.hex() if isinstance(user_node, (bytes, bytearray)) else ""
+        active_hex = default_node.hex() if isinstance(default_node, (bytes, bytearray)) else ""
+
+        return {
+            "configured": configured_hex,
+            "active": active_hex,
+            "is_auto": user_node is None
+        }
+
+    def set_propagation_node(self, node_hex: Optional[str]) -> Tuple[bool, str]:
+        """Set user-selected propagation node by hex hash, or None for auto-selection."""
+        if not self.app:
+            return False, "NomadNet-Backend nicht bereit"
+
+        if not node_hex or not node_hex.strip():
+            try:
+                self.app.set_user_selected_propagation_node(None)
+                active = self.app.get_default_propagation_node()
+                active_hex = active.hex() if isinstance(active, (bytes, bytearray)) else "Keiner"
+                return True, f"Automatischer Modus aktiv (Node: {active_hex[:8]}...)"
+            except Exception as e:
+                return False, f"Fehler beim Zurücksetzen: {e}"
+
+        clean_hex = node_hex.strip().lower()
+        if len(clean_hex) != 32:
+            return False, "Der Node-Hash muss genau 32 Hex-Zeichen (16 Bytes) lang sein"
+
+        try:
+            node_bytes = bytes.fromhex(clean_hex)
+        except ValueError:
+            return False, "Ungültiger Hex-Wert"
+
+        try:
+            self.app.set_user_selected_propagation_node(node_bytes)
+            if not RNS.Transport.has_path(node_bytes):
+                RNS.Transport.request_path(node_bytes)
+            return True, f"Propagation-Node [{clean_hex[:8]}...{clean_hex[-4:]}] gespeichert!"
+        except Exception as e:
+            return False, f"Fehler beim Speichern: {e}"
+
     def request_sync(self, target_node: Optional[str] = None) -> Tuple[bool, str]:
         """Request LXMF message sync with default or specified propagation node."""
         if not self.app:

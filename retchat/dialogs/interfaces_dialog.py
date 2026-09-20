@@ -67,7 +67,35 @@ class InterfacesDialog(_BaseDialog):
 
         self.page.add(group_tcp)
 
-        # 3. Mesh Presence & Announce
+        # 3. LXMF Propagation Node Configuration
+        group_prop = Adw.PreferencesGroup()
+        group_prop.set_title("LXMF Propagation Node")
+        group_prop.set_description(
+            "Store und Forward Zwischenspeicher für Offline-Nachrichten. "
+            "Feld leeren und speichern, um die automatische Netzerkennung zu nutzen."
+        )
+
+        prop_info = self.service.get_propagation_node_info()
+
+        self.prop_node_row = Adw.EntryRow(title="Node Ziel-Hash (32 Hex-Zeichen)")
+        self.prop_node_row.set_text(prop_info.get("configured", ""))
+        group_prop.add(self.prop_node_row)
+
+        self.prop_active_row = Adw.ActionRow(
+            title="Aktiver Node",
+            subtitle=self._format_prop_subtitle(prop_info)
+        )
+        self.prop_active_row.set_subtitle_selectable(True)
+
+        prop_save_btn = Gtk.Button(label="Speichern", valign=Gtk.Align.CENTER)
+        prop_save_btn.add_css_class("suggested-action")
+        prop_save_btn.connect("clicked", self._on_save_prop_node_clicked)
+        self.prop_active_row.add_suffix(prop_save_btn)
+        group_prop.add(self.prop_active_row)
+
+        self.page.add(group_prop)
+
+        # 4. Mesh Presence & Announce
         group_announce = Adw.PreferencesGroup()
         group_announce.set_title("Mesh-Präsenz (Announce)")
         group_announce.set_description(
@@ -209,6 +237,22 @@ class InterfacesDialog(_BaseDialog):
 
         self.service.save_tcp_settings(host, port, False)
         self._show_toast("TCP-Einstellungen gespeichert!")
+
+    def _on_save_prop_node_clicked(self, _btn):
+        node_hex = self.prop_node_row.get_text().strip()
+        success, msg = self.service.set_propagation_node(node_hex if node_hex else None)
+        self._show_toast(msg)
+        if success:
+            prop_info = self.service.get_propagation_node_info()
+            self.prop_active_row.set_subtitle(self._format_prop_subtitle(prop_info))
+
+    def _format_prop_subtitle(self, prop_info: Dict[str, Any]) -> str:
+        active = prop_info.get("active", "")
+        is_auto = prop_info.get("is_auto", True)
+        if not active:
+            return "Kein Node verfügbar"
+        mode_str = "automatisch gewählt" if is_auto else "benutzerdefiniert"
+        return f"{active} ({mode_str})"
 
     def _on_announce_clicked(self, _btn):
         try:

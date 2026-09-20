@@ -127,7 +127,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         # Interfaces & Mesh status button
         iface_btn = Gtk.Button(icon_name="network-wireless-symbolic")
-        iface_btn.set_tooltip_text("Schnittstellen, TCP-Hub & Mesh-Announce")
+        iface_btn.set_tooltip_text("Schnittstellen, TCP-Hub & Propagation-Node")
         iface_btn.connect("clicked", lambda _b: self._show_interfaces_dialog())
         header.pack_end(iface_btn)
 
