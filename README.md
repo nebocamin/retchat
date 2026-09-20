@@ -38,20 +38,38 @@ Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über
 
 ## Installation & Ausführung
 
-### 1. Als Flatpak (Empfohlen für postmarketOS / Phosh)
+### 1. Als Flatpak für postmarketOS / Phosh (aarch64 / ARM64)
 
-Das fertige Flatpak-Bundle `retchat.flatpak` befindet sich im Projektverzeichnis und kann direkt auf jedem Linux- oder postmarketOS-Gerät installiert werden:
+Das fertige Flatpak-Bundle **`retchat-aarch64.flatpak`** (4.6 MB) ist speziell für **aarch64**-Geräte (wie PinePhone, PinePhone Pro, Librem 5, etc.) gebaut:
+
+1. Bundle auf das Telefon kopieren:
+   ```bash
+   scp retchat-aarch64.flatpak user@telefon:~/
+   ```
+2. Auf dem Telefon installieren:
+   ```bash
+   flatpak install --user ~/retchat-aarch64.flatpak
+   ```
+
+### 2. Als Flatpak für x86_64 (Desktop-PCs)
 
 ```bash
 flatpak install --user retchat.flatpak
 ```
 
-Zum erneuten Erstellen des Flatpaks:
+### 3. Flatpak neu bauen
 ```bash
+# Für aarch64 (postmarketOS Telefon):
+./build-flatpak.sh --aarch64
+
+# Für x86_64 (Desktop PC):
 ./build-flatpak.sh
+
+# Für beide Architekturen:
+./build-flatpak.sh --all
 ```
 
-### 2. Direkt über das Startskript (Desktop / Entwicklung)
+### 4. Direkt über das lokale Startskript
 ```bash
 ./retchat.sh
 ```
@@ -62,9 +80,11 @@ Zum erneuten Erstellen des Flatpaks:
 
 ```text
 retchat/
-├── org.selfmade.Retchat.json     # Flatpak-Manifest
-├── build-flatpak.sh              # Automatisches Flatpak-Build-Skript
-├── retchat.flatpak               # Fertiges Flatpak-Bundle (5.1 MB)
+├── org.selfmade.Retchat.json         # Flatpak-Manifest
+├── build-flatpak.sh                  # Universelles Flatpak-Build-Skript
+├── build_aarch64_bundle.py           # aarch64 Cross-Packager (ohne QEMU/binfmt)
+├── retchat-aarch64.flatpak           # Fertiges ARM64 Flatpak-Bundle (4.6 MB)
+├── retchat.flatpak                   # Fertiges x86_64 Flatpak-Bundle (5.1 MB)
 ├── org.selfmade.Retchat.metainfo.xml # AppStream Metadaten
 ├── org.selfmade.Retchat.desktop  # Desktop-Starter mit FormFactor-Unterstützung
 ├── setup.py                      # Python Package Definition

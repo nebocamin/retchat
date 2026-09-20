@@ -5,6 +5,9 @@ __pycache__/
 .flatpak-build/
 .flatpak-repo/
 .flatpak-builder/
+.flatpak-build-aarch64/
+.flatpak-repo-aarch64/
+.wheels-aarch64/
 *.flatpak
 build/
 dist/
