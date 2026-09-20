@@ -104,7 +104,7 @@ class RelayChatView(Gtk.Box):
 
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.messages_box.set_margin_top(12)
-        self.messages_box.set_margin_bottom(12)
+        self.messages_box.set_margin_bottom(18)
         self.messages_box.set_margin_start(10)
         self.messages_box.set_margin_end(10)
         self.messages_box.set_vexpand(True)

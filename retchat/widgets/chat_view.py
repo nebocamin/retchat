@@ -60,7 +60,7 @@ class ChatView(Gtk.Box):
 
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.messages_box.set_margin_top(12)
-        self.messages_box.set_margin_bottom(12)
+        self.messages_box.set_margin_bottom(18)
         self.messages_box.set_margin_start(16)
         self.messages_box.set_margin_end(16)
         self.messages_box.set_vexpand(True)
