@@ -101,6 +101,8 @@ class ReticulumService:
         self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._path_resolved_callbacks: List[Callable[[str, int], None]] = []
         self._conversations_changed_callbacks: List[Callable[[], None]] = []
+        self._rrc_message_callbacks: List[Callable[[Dict[str, Any]], None]] = []
+        self._rrc_change_callbacks: List[Callable[[Optional[str]], None]] = []
 
         # Ensure ~/.reticulum/config has TCP enabled as default, and enable_transport=False
         self._ensure_tcp_default_config()
@@ -110,6 +112,11 @@ class ReticulumService:
 
         Conversation.created_callback = self._on_conversations_changed_nomadnet
         self.app = _RetchatApp(self, configdir=self._configdir, rnsconfigdir=self._rnsconfigdir)
+
+        # Wire RRC (Reticulum Relay Chat) callbacks
+        if hasattr(self.app, "rrc") and self.app.rrc:
+            self.app.rrc.set_message_callback(self._on_nomadnet_rrc_message)
+            self.app.rrc.set_change_callback(self._on_nomadnet_rrc_change)
 
         self._conv_cache: Dict[str, Conversation] = {}
         self._pending: Dict[str, List[str]] = {}
@@ -1102,6 +1109,256 @@ class ReticulumService:
             return self.app.get_sync_progress()
         except Exception:
             return 0.0
+
+    # ------------------------------------------------------------------ #
+    # Reticulum Relay Chat (RRC)
+    # ------------------------------------------------------------------ #
+    def _on_nomadnet_rrc_message(self, hub, msg):
+        try:
+            hub_hex = hub.hub_hash.hex() if hasattr(hub, "hub_hash") and hub.hub_hash else ""
+            my_hash = None
+            if hasattr(self.app, "rrc") and self.app.rrc and hasattr(self.app.rrc, "identity"):
+                my_hash = getattr(self.app.rrc.identity, "hash", None)
+
+            msg_dict = {
+                "hub_hash": hub_hex,
+                "hub_name": getattr(hub, "name", hub_hex[:8]),
+                "room": getattr(msg, "room", None),
+                "src": msg.src.hex() if getattr(msg, "src", None) else "",
+                "nick": getattr(msg, "nick", None) or (msg.src.hex()[:8] if getattr(msg, "src", None) else "System"),
+                "text": getattr(msg, "text", ""),
+                "kind": getattr(msg, "kind", "msg"),
+                "timestamp": getattr(msg, "ts", 0) / 1000.0,
+                "is_me": (msg.src == my_hash) if (getattr(msg, "src", None) and my_hash) else False
+            }
+            GLib.idle_add(self._dispatch_rrc_message, msg_dict)
+        except Exception as e:
+            RNS.log(f"Retchat: Error dispatching RRC message: {e}", RNS.LOG_WARNING)
+
+    def _dispatch_rrc_message(self, msg_dict: Dict[str, Any]):
+        for cb in list(self._rrc_message_callbacks):
+            try:
+                cb(msg_dict)
+            except Exception as e:
+                RNS.log(f"Retchat: RRC message callback error: {e}", RNS.LOG_WARNING)
+
+    def _on_nomadnet_rrc_change(self, hub=None):
+        try:
+            hub_hex = hub.hub_hash.hex() if (hub and hasattr(hub, "hub_hash") and hub.hub_hash) else None
+            GLib.idle_add(self._dispatch_rrc_change, hub_hex)
+        except Exception as e:
+            RNS.log(f"Retchat: Error dispatching RRC change: {e}", RNS.LOG_WARNING)
+
+    def _dispatch_rrc_change(self, hub_hex: Optional[str]):
+        for cb in list(self._rrc_change_callbacks):
+            try:
+                cb(hub_hex)
+            except Exception as e:
+                RNS.log(f"Retchat: RRC change callback error: {e}", RNS.LOG_WARNING)
+
+    def register_rrc_callbacks(self, on_message: Optional[Callable[[Dict[str, Any]], None]] = None,
+                               on_change: Optional[Callable[[Optional[str]], None]] = None):
+        if on_message and on_message not in self._rrc_message_callbacks:
+            self._rrc_message_callbacks.append(on_message)
+        if on_change and on_change not in self._rrc_change_callbacks:
+            self._rrc_change_callbacks.append(on_change)
+
+    def get_rrc_hubs(self) -> List[Dict[str, Any]]:
+        """Return list of configured RRC hubs and their rooms."""
+        if not self.app or not hasattr(self.app, "rrc") or not self.app.rrc:
+            return []
+
+        results = []
+        with self.app.rrc._lock:
+            for hub in self.app.rrc.hubs:
+                hub_hex = hub.hub_hash.hex()
+                joined_rooms = sorted(list(hub.rooms))
+                unread = set(hub.unread_rooms)
+                results.append({
+                    "hash": hub_hex,
+                    "name": hub.name or f"Hub [{hub_hex[:8]}]",
+                    "status": hub.status,
+                    "status_text": hub.status_text,
+                    "is_connected": hub.status == hub.STATUS_CONNECTED,
+                    "rooms": joined_rooms,
+                    "unread_rooms": list(unread),
+                    "motd": getattr(hub, "motd", None),
+                })
+        return results
+
+    def add_rrc_hub(self, hub_hex: str, name: Optional[str] = None, initial_room: str = "#general") -> Tuple[bool, str]:
+        """Add and connect to an RRC hub by destination hash."""
+        if not self.app or not hasattr(self.app, "rrc") or not self.app.rrc:
+            return False, "RRC-Backend nicht bereit"
+
+        clean_hex = hub_hex.strip().lower()
+        if len(clean_hex) != 32:
+            return False, "Hub-Hash muss genau 32 Hex-Zeichen (16 Bytes) lang sein"
+
+        try:
+            hub_bytes = bytes.fromhex(clean_hex)
+        except ValueError:
+            return False, "Ungültiger Hex-Wert"
+
+        try:
+            rrc = self.app.rrc
+            hub = rrc.find_hub(hub_bytes)
+            if not hub:
+                hub = rrc.add_hub(hub_bytes, name=name.strip() if name and name.strip() else None)
+
+            if initial_room:
+                clean_init = initial_room.strip().lower()
+                if not clean_init.startswith("#"):
+                    clean_init = "#" + clean_init
+                hub.add_room(clean_init)
+
+            hub.auto_reconnect = True
+            rrc.save()
+
+            hub.connect()
+            return True, f"Hub '{hub.name}' hinzugefügt, verbinde..."
+        except Exception as e:
+            return False, f"Fehler beim Hinzufügen des Hubs: {e}"
+
+    def remove_rrc_hub(self, hub_hex: str) -> bool:
+        """Disconnect and remove an RRC hub."""
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub or not self.app or not hasattr(self.app, "rrc"):
+            return False
+
+        try:
+            try:
+                hub.disconnect()
+            except Exception:
+                pass
+            self.app.rrc.remove_hub(hub)
+            return True
+        except Exception as e:
+            RNS.log(f"Retchat: Error removing hub: {e}", RNS.LOG_WARNING)
+            return False
+
+    def connect_rrc_hub(self, hub_hex: str):
+        hub = self._find_hub_by_hex(hub_hex)
+        if hub:
+            hub.connect()
+
+    def disconnect_rrc_hub(self, hub_hex: str):
+        hub = self._find_hub_by_hex(hub_hex)
+        if hub:
+            hub.disconnect()
+
+    def join_rrc_room(self, hub_hex: str, room_name: str) -> bool:
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub:
+            return False
+        clean_room = room_name.strip().lower()
+        if not clean_room.startswith("#"):
+            clean_room = "#" + clean_room
+        try:
+            hub.add_room(clean_room)
+            if hub.status == hub.STATUS_CONNECTED:
+                hub.join_room(clean_room)
+            self.app.rrc.save()
+            self.app.rrc._notify_change(hub)
+            return True
+        except Exception as e:
+            RNS.log(f"Retchat: Error joining room: {e}", RNS.LOG_WARNING)
+            return False
+
+    def part_rrc_room(self, hub_hex: str, room_name: str) -> bool:
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub:
+            return False
+        try:
+            hub.part_room(room_name)
+            return True
+        except Exception as e:
+            RNS.log(f"Retchat: Error parting room: {e}", RNS.LOG_WARNING)
+            return False
+
+    def send_rrc_message(self, hub_hex: str, room_name: str, text: str) -> Tuple[bool, str]:
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub:
+            return False, "Hub nicht gefunden"
+        if hub.status != hub.STATUS_CONNECTED:
+            return False, f"Hub ist nicht verbunden ({hub.status_text})"
+
+        text_str = text.strip()
+        if not text_str:
+            return False, "Nachricht darf nicht leer sein"
+
+        try:
+            if text_str.startswith("/me "):
+                action_text = text_str[4:].strip()
+                hub.send_action(room_name, action_text)
+            elif text_str.startswith("/part"):
+                hub.part_room(room_name)
+            elif text_str.startswith("/join "):
+                new_room = text_str[6:].strip()
+                self.join_rrc_room(hub_hex, new_room)
+            else:
+                hub.send_message(room_name, text_str)
+            return True, "Gesendet"
+        except Exception as e:
+            return False, f"Fehler beim Senden: {e}"
+
+    def get_rrc_messages(self, hub_hex: str, room_name: str) -> List[Dict[str, Any]]:
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub:
+            return []
+        try:
+            raw_msgs = hub.get_messages(room_name)
+            my_hash = None
+            if hasattr(self.app, "rrc") and self.app.rrc and hasattr(self.app.rrc, "identity"):
+                my_hash = getattr(self.app.rrc.identity, "hash", None)
+
+            results = []
+            for m in raw_msgs:
+                results.append({
+                    "kind": getattr(m, "kind", "msg"),
+                    "room": getattr(m, "room", room_name),
+                    "src": m.src.hex() if getattr(m, "src", None) else "",
+                    "nick": getattr(m, "nick", None) or (m.src.hex()[:8] if getattr(m, "src", None) else "System"),
+                    "text": getattr(m, "text", ""),
+                    "timestamp": getattr(m, "ts", 0) / 1000.0,
+                    "is_me": (m.src == my_hash) if (getattr(m, "src", None) and my_hash) else False
+                })
+            return results
+        except Exception:
+            return []
+
+    def get_rrc_members(self, hub_hex: str, room_name: str) -> List[Dict[str, str]]:
+        hub = self._find_hub_by_hex(hub_hex)
+        if not hub:
+            return []
+        try:
+            members = hub.get_members(room_name)
+            results = []
+            for m in members:
+                m_bytes = bytes(m) if isinstance(m, (bytes, bytearray)) else None
+                m_hex = m_bytes.hex() if m_bytes else str(m)
+                nick = hub.display_name_for(m_bytes) if m_bytes else m_hex[:8]
+                results.append({"hash": m_hex, "nick": nick})
+            return results
+        except Exception:
+            return []
+
+    def mark_rrc_room_read(self, hub_hex: str, room_name: str):
+        hub = self._find_hub_by_hex(hub_hex)
+        if hub:
+            try:
+                hub.mark_read(room_name)
+            except Exception:
+                pass
+
+    def _find_hub_by_hex(self, hub_hex: str):
+        if not self.app or not hasattr(self.app, "rrc") or not self.app.rrc:
+            return None
+        try:
+            hub_bytes = bytes.fromhex(hub_hex.strip().lower())
+            return self.app.rrc.find_hub(hub_bytes)
+        except Exception:
+            return None
 
     def shutdown(self):
         """Clean shutdown of background threads and NomadNet."""

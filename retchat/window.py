@@ -10,6 +10,7 @@ from gi.repository import Gtk, Adw, Gio, GLib, GObject, Gdk
 
 import RNS
 from retchat.database import Database
+from retchat.dialogs.add_relay_dialog import AddRelayDialog, COMMUNITY_HUB_HASH, COMMUNITY_HUB_NAME
 from retchat.dialogs.interfaces_dialog import InterfacesDialog
 from retchat.dialogs.new_chat_dialog import NewChatDialog
 from retchat.dialogs.profile_dialog import ProfileDialog
@@ -17,6 +18,8 @@ from retchat.reticulum_service import ReticulumService
 from retchat.widgets.announce_row import AnnounceRow
 from retchat.widgets.chat_view import ChatView
 from retchat.widgets.conversation_row import ConversationRow
+from retchat.widgets.relay_chat_view import RelayChatView
+from retchat.widgets.relay_room_row import RelayRoomRow
 
 
 class RetchatWindow(Adw.ApplicationWindow):
@@ -31,8 +34,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.set_size_request(300, 360)
 
         self.current_dest_hash: Optional[str] = None
+        self.current_relay_hub_hash: Optional[str] = None
+        self.current_relay_room: Optional[str] = None
         self.conv_rows: Dict[str, ConversationRow] = {}
         self.announce_rows: Dict[str, AnnounceRow] = {}
+        self.relay_rows: Dict[tuple, RelayRoomRow] = {}
 
         # Toast Overlay
         self.toast_overlay = Adw.ToastOverlay()
@@ -71,11 +77,17 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.add_announce_callback(self._on_service_announce_received)
         self.service.add_path_resolved_callback(self._on_service_path_resolved)
         self.service.add_conversations_changed_callback(self._on_service_conversations_changed)
+        self.service.register_rrc_callbacks(
+            on_message=self._on_rrc_message,
+            on_change=self._on_rrc_change
+        )
 
         # Initial data loading
         self._ensure_default_contact()
+        self._ensure_default_relay_hub()
         self._load_conversations()
         self._load_announces()
+        self._load_relay_rooms()
 
     def _setup_actions(self):
         # Action: Copy Hash (win.copy_hash)
@@ -107,6 +119,24 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_announce.connect("activate", lambda _a, _p: self._action_announce_self())
         self.add_action(self.action_announce)
 
+        # Action: Relay Reconnect (win.relay_reconnect)
+        self.action_relay_reconnect = Gio.SimpleAction.new("relay_reconnect", None)
+        self.action_relay_reconnect.connect("activate", lambda _a, _p: self._action_relay_reconnect())
+        self.action_relay_reconnect.set_enabled(False)
+        self.add_action(self.action_relay_reconnect)
+
+        # Action: Relay Copy Hash (win.relay_copy_hash)
+        self.action_relay_copy = Gio.SimpleAction.new("relay_copy_hash", None)
+        self.action_relay_copy.connect("activate", lambda _a, _p: self._action_relay_copy_hash())
+        self.action_relay_copy.set_enabled(False)
+        self.add_action(self.action_relay_copy)
+
+        # Action: Relay Part Room (win.relay_part_room)
+        self.action_relay_part = Gio.SimpleAction.new("relay_part_room", None)
+        self.action_relay_part.connect("activate", lambda _a, _p: self._action_relay_part_room())
+        self.action_relay_part.set_enabled(False)
+        self.add_action(self.action_relay_part)
+
     # --- UI Builders ---
     def _build_sidebar(self) -> Gtk.Widget:
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -132,11 +162,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         header.pack_end(iface_btn)
 
         # New chat button (+)
-        add_btn = Gtk.Button(icon_name="list-add-symbolic")
-        add_btn.add_css_class("suggested-action")
-        add_btn.set_tooltip_text("Neuen Chat starten")
-        add_btn.connect("clicked", lambda _b: self._show_new_chat_dialog())
-        header.pack_end(add_btn)
+        self.add_btn = Gtk.Button(icon_name="list-add-symbolic")
+        self.add_btn.add_css_class("suggested-action")
+        self.add_btn.set_tooltip_text("Neuen Chat starten")
+        self.add_btn.connect("clicked", lambda _b: self._on_add_button_clicked())
+        header.pack_end(self.add_btn)
 
         sidebar_box.append(header)
 
@@ -150,7 +180,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.search_entry.connect("search-changed", self._on_search_changed)
         sidebar_box.append(self.search_entry)
 
-        # View Switcher (Chats vs Entdecken)
+        # View Switcher (Chats vs Entdecken vs Relay)
         stack_switcher = Gtk.StackSwitcher()
         stack_switcher.set_halign(Gtk.Align.CENTER)
         stack_switcher.set_margin_top(4)
@@ -207,6 +237,33 @@ class RetchatWindow(Adw.ApplicationWindow):
         announce_scroll.set_child(self.announce_list_box)
         self.sidebar_stack.add_titled(announce_scroll, "discover", "Entdecken")
 
+        # Tab 3: Relay (Reticulum Relay Chat Hubs & Rooms)
+        relay_scroll = Gtk.ScrolledWindow()
+        relay_scroll.set_vexpand(True)
+        relay_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+
+        self.relay_list_box = Gtk.ListBox()
+        self.relay_list_box.add_css_class("navigation-sidebar")
+        self.relay_list_box.connect("row-selected", self._on_relay_selected)
+
+        # Empty state for relay
+        self.relay_empty_page = Adw.StatusPage()
+        self.relay_empty_page.set_icon_name("network-workgroup-symbolic")
+        self.relay_empty_page.set_title("Keine Relay-Räume")
+        self.relay_empty_page.set_description(
+            "Tritt einem Relay-Chat-Hub (RRC) bei, um in Gruppenräumen über das Mesh zu chatten."
+        )
+        self.empty_relay_btn = Gtk.Button(label="Community-Hub beitreten")
+        self.empty_relay_btn.add_css_class("suggested-action")
+        self.empty_relay_btn.add_css_class("pill")
+        self.empty_relay_btn.set_halign(Gtk.Align.CENTER)
+        self.empty_relay_btn.connect("clicked", lambda _b: self._quick_join_community_relay())
+        self.relay_empty_page.set_child(self.empty_relay_btn)
+        self.relay_list_box.set_placeholder(self.relay_empty_page)
+
+        relay_scroll.set_child(self.relay_list_box)
+        self.sidebar_stack.add_titled(relay_scroll, "relay", "Relay")
+
         sidebar_box.append(self.sidebar_stack)
         return sidebar_box
 
@@ -241,14 +298,39 @@ class RetchatWindow(Adw.ApplicationWindow):
         )
         self.content_stack.add_named(self.chat_view, "chat")
 
+        # 3. Relay Chat View
+        self.relay_chat_view = RelayChatView(
+            on_send_message=self._on_send_relay_message,
+            on_part_room=self._on_part_relay_room,
+            on_back_clicked=self._on_chat_back_clicked,
+            on_reconnect_hub=self._on_reconnect_relay_hub
+        )
+        self.content_stack.add_named(self.relay_chat_view, "relay_chat")
+
         self.content_stack.set_visible_child_name("empty")
         return self.content_stack
 
-    # --- Pre-populating Contact ---
+    # --- Pre-populating Contact & Relay Hub ---
     def _ensure_default_contact(self):
         """Pre-populate the user's specified contact if not present."""
         test_contact_hash = "8d883cfe6c1a846d8f34e5a95a149fdb"
         self.service.start_conversation(test_contact_hash)
+
+    def _ensure_default_relay_hub(self):
+        """Ensure public community RRC hub is added if no hubs are configured."""
+        try:
+            hubs = self.service.get_rrc_hubs()
+            if not hubs:
+                self.service.add_rrc_hub(COMMUNITY_HUB_HASH, name=COMMUNITY_HUB_NAME, initial_room="#general")
+        except Exception as e:
+            RNS.log(f"Retchat: Error initializing default RRC hub: {e}", RNS.LOG_WARNING)
+
+    def _on_add_button_clicked(self):
+        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
+        if active_tab == "relay":
+            self._show_add_relay_dialog()
+        else:
+            self._show_new_chat_dialog()
 
     # --- Conversation List Management ---
     def _load_conversations(self, query: Optional[str] = None):
@@ -276,6 +358,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
         if active_tab == "discover":
             self._load_announces(query=q if q else None)
+        elif active_tab == "relay":
+            self._load_relay_rooms(query=q if q else None)
         else:
             self._load_conversations(query=q if q else None)
 
@@ -284,9 +368,15 @@ class RetchatWindow(Adw.ApplicationWindow):
         q = self.search_entry.get_text().strip()
         if active_tab == "discover":
             self.search_entry.set_placeholder_text("Peers & Ankündigungen durchsuchen...")
+            self.add_btn.set_tooltip_text("Neuen Chat starten")
             self._load_announces(query=q if q else None)
+        elif active_tab == "relay":
+            self.search_entry.set_placeholder_text("Relay-Räume durchsuchen...")
+            self.add_btn.set_tooltip_text("Relay-Hub beitreten")
+            self._load_relay_rooms(query=q if q else None)
         else:
             self.search_entry.set_placeholder_text("Chats durchsuchen...")
+            self.add_btn.set_tooltip_text("Neuen Chat starten")
             self._load_conversations(query=q if q else None)
 
     def _on_conv_selected(self, _list_box, row: Optional[ConversationRow]):
@@ -303,10 +393,21 @@ class RetchatWindow(Adw.ApplicationWindow):
             conv = self.service.get_conversation(dest_hash)
 
         self.current_dest_hash = dest_hash
+        self.current_relay_hub_hash = None
+        self.current_relay_room = None
+
         self.action_copy.set_enabled(True)
         self.action_rename.set_enabled(True)
         self.action_path.set_enabled(True)
         self.action_sync.set_enabled(True)
+
+        self.action_relay_reconnect.set_enabled(False)
+        self.action_relay_copy.set_enabled(False)
+        self.action_relay_part.set_enabled(False)
+
+        if hasattr(self, "relay_list_box"):
+            self.relay_list_box.unselect_all()
+
         self.service.mark_read(dest_hash)
 
         # Update row badge
@@ -324,6 +425,224 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_chat_back_clicked(self):
         self.split_view.set_show_content(False)
+
+    # --- Relay Chat Management ---
+    def _load_relay_rooms(self, query: Optional[str] = None):
+        hubs = self.service.get_rrc_hubs()
+        while child := self.relay_list_box.get_first_child():
+            self.relay_list_box.remove(child)
+        self.relay_rows.clear()
+
+        q = query.strip().lower() if query else None
+
+        for hub in hubs:
+            hub_hash = hub["hash"].lower()
+            hub_name = hub["name"]
+            is_connected = hub["is_connected"]
+            status_text = hub["status_text"]
+            unread_rooms = set(hub.get("unread_rooms", []))
+
+            for room in hub.get("rooms", []):
+                if q:
+                    match_room = q in room.lower()
+                    match_hub = q in hub_name.lower() or q in hub_hash
+                    if not (match_room or match_hub):
+                        continue
+
+                is_unread = room in unread_rooms
+                row = RelayRoomRow(
+                    hub_hash=hub_hash,
+                    room_name=room,
+                    hub_name=hub_name,
+                    is_connected=is_connected,
+                    status_text=status_text,
+                    is_unread=is_unread
+                )
+                self.relay_rows[(hub_hash, room)] = row
+                self.relay_list_box.append(row)
+
+        if q:
+            self.relay_empty_page.set_title("Keine Räume gefunden")
+            self.relay_empty_page.set_description(f"Keine Relay-Räume gefunden für «{query}».")
+            if hasattr(self, "empty_relay_btn"):
+                self.empty_relay_btn.set_visible(False)
+        else:
+            self.relay_empty_page.set_title("Keine Relay-Räume")
+            self.relay_empty_page.set_description(
+                "Tritt einem Relay-Chat-Hub (RRC) bei, um in Gruppenräumen über das Mesh zu chatten."
+            )
+            if hasattr(self, "empty_relay_btn"):
+                self.empty_relay_btn.set_visible(True)
+
+    def _on_relay_selected(self, _list_box, row: Optional[RelayRoomRow]):
+        if row is None:
+            return
+        self.open_relay_room(row.hub_hash, row.room_name)
+
+    def open_relay_room(self, hub_hash: str, room_name: str):
+        hub_hash = hub_hash.lower()
+        self.current_relay_hub_hash = hub_hash
+        self.current_relay_room = room_name
+        self.current_dest_hash = None
+
+        self.action_copy.set_enabled(False)
+        self.action_rename.set_enabled(False)
+        self.action_path.set_enabled(False)
+        self.action_sync.set_enabled(False)
+
+        self.action_relay_reconnect.set_enabled(True)
+        self.action_relay_copy.set_enabled(True)
+        self.action_relay_part.set_enabled(True)
+
+        self.service.mark_rrc_room_read(hub_hash, room_name)
+
+        key = (hub_hash, room_name)
+        if key in self.relay_rows:
+            row = self.relay_rows[key]
+            row.update_state(
+                hub_name=row.hub_name,
+                is_connected=row.is_connected,
+                status_text=row.status_text,
+                is_unread=False
+            )
+
+        if hasattr(self, "conv_list_box"):
+            self.conv_list_box.unselect_all()
+
+        hubs = self.service.get_rrc_hubs()
+        hub_name = hub_hash[:8]
+        status_text = "Getrennt"
+        for h in hubs:
+            if h["hash"].lower() == hub_hash:
+                hub_name = h["name"]
+                status_text = h["status_text"]
+                break
+
+        messages = self.service.get_rrc_messages(hub_hash, room_name)
+        members = self.service.get_rrc_members(hub_hash, room_name)
+
+        self.relay_chat_view.load_room(
+            hub_hash=hub_hash,
+            room_name=room_name,
+            hub_name=hub_name,
+            status_text=status_text,
+            messages=messages,
+            members=members
+        )
+
+        self.content_stack.set_visible_child_name("relay_chat")
+        self.split_view.set_show_content(True)
+
+    def _on_send_relay_message(self, hub_hash: str, room_name: str, text: str):
+        try:
+            success, msg = self.service.send_rrc_message(hub_hash, room_name, text)
+            if not success:
+                self._show_toast(msg)
+            else:
+                messages = self.service.get_rrc_messages(hub_hash, room_name)
+                members = self.service.get_rrc_members(hub_hash, room_name)
+                hubs = self.service.get_rrc_hubs()
+                hub_name = hub_hash[:8]
+                status_text = "Verbunden"
+                for h in hubs:
+                    if h["hash"].lower() == hub_hash.lower():
+                        hub_name = h["name"]
+                        status_text = h["status_text"]
+                        break
+                self.relay_chat_view.load_room(
+                    hub_hash=hub_hash,
+                    room_name=room_name,
+                    hub_name=hub_name,
+                    status_text=status_text,
+                    messages=messages,
+                    members=members
+                )
+        except Exception as e:
+            self._show_toast(f"Fehler: {e}")
+
+    def _on_part_relay_room(self, hub_hash: str, room_name: str):
+        self.service.part_rrc_room(hub_hash, room_name)
+        if self.current_relay_hub_hash == hub_hash and self.current_relay_room == room_name:
+            self.content_stack.set_visible_child_name("empty")
+            self.split_view.set_show_content(False)
+            self.current_relay_hub_hash = None
+            self.current_relay_room = None
+            self.action_relay_reconnect.set_enabled(False)
+            self.action_relay_copy.set_enabled(False)
+            self.action_relay_part.set_enabled(False)
+        self._load_relay_rooms()
+        self._show_toast(f"{room_name} verlassen")
+
+    def _on_reconnect_relay_hub(self, hub_hash: str):
+        self.service.connect_rrc_hub(hub_hash)
+        self._show_toast("Verbindung wird hergestellt...")
+
+    def _quick_join_community_relay(self):
+        success, msg = self.service.add_rrc_hub(
+            COMMUNITY_HUB_HASH,
+            name=COMMUNITY_HUB_NAME,
+            initial_room="#general"
+        )
+        self._show_toast(msg)
+        self._load_relay_rooms()
+        self.open_relay_room(COMMUNITY_HUB_HASH, "#general")
+
+    def _show_add_relay_dialog(self):
+        dialog = AddRelayDialog(self, service=self.service, on_hub_added=self._on_relay_hub_added)
+        dialog.present()
+
+    def _on_relay_hub_added(self, hub_hex: str, room: str):
+        self._load_relay_rooms()
+        self.open_relay_room(hub_hex, room)
+
+    def _on_rrc_message(self, msg_dict: Dict[str, Any]):
+        hub_hash = msg_dict.get("hub_hash", "").lower()
+        room = msg_dict.get("room")
+        if (self.current_relay_hub_hash and self.current_relay_hub_hash.lower() == hub_hash and
+                self.current_relay_room and self.current_relay_room.lower() == (room or "").lower()):
+            self.relay_chat_view.add_message(msg_dict)
+            self.service.mark_rrc_room_read(hub_hash, room)
+        else:
+            key = (hub_hash, room)
+            if key in self.relay_rows:
+                row = self.relay_rows[key]
+                row.update_state(
+                    hub_name=row.hub_name,
+                    is_connected=row.is_connected,
+                    status_text=row.status_text,
+                    is_unread=True
+                )
+
+    def _on_rrc_change(self, hub_hex: Optional[str]):
+        q = self.search_entry.get_text().strip() if hasattr(self, "search_entry") else None
+        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
+        if active_tab == "relay":
+            self._load_relay_rooms(query=q if q else None)
+
+        if self.current_relay_hub_hash and self.current_relay_room:
+            cur_hub_hex = self.current_relay_hub_hash.lower()
+            if not hub_hex or hub_hex.lower() == cur_hub_hex:
+                hubs = self.service.get_rrc_hubs()
+                for h in hubs:
+                    if h["hash"].lower() == cur_hub_hex:
+                        self.relay_chat_view.update_status(h["status_text"])
+                        members = self.service.get_rrc_members(cur_hub_hex, self.current_relay_room)
+                        self.relay_chat_view.update_members(members)
+                        break
+
+    def _action_relay_reconnect(self):
+        if self.current_relay_hub_hash:
+            self._on_reconnect_relay_hub(self.current_relay_hub_hash)
+
+    def _action_relay_copy_hash(self):
+        if self.current_relay_hub_hash:
+            clipboard = Gdk.Display.get_default().get_clipboard()
+            clipboard.set(self.current_relay_hub_hash)
+            self._show_toast("Hub-Adresse kopiert!")
+
+    def _action_relay_part_room(self):
+        if self.current_relay_hub_hash and self.current_relay_room:
+            self._on_part_relay_room(self.current_relay_hub_hash, self.current_relay_room)
 
     # --- Announce Discovery Management ---
     def _load_announces(self, query: Optional[str] = None):

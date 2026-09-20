@@ -2,5 +2,6 @@
 from retchat.dialogs.new_chat_dialog import NewChatDialog
 from retchat.dialogs.profile_dialog import ProfileDialog
 from retchat.dialogs.interfaces_dialog import InterfacesDialog
+from retchat.dialogs.add_relay_dialog import AddRelayDialog
 
-__all__ = ["NewChatDialog", "ProfileDialog", "InterfacesDialog"]
+__all__ = ["NewChatDialog", "ProfileDialog", "InterfacesDialog", "AddRelayDialog"]
