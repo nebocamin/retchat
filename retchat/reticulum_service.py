@@ -26,6 +26,7 @@ STATE_FAILED = 3
 
 class ReticulumService:
     aspect_filter = None  # Catch announces for discovery
+    receive_path_responses = True  # Catch path responses
 
     def __init__(self, db: Database):
         self.db = db
@@ -52,6 +53,7 @@ class ReticulumService:
         self._message_received_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._message_state_callbacks: List[Callable[[str, int], None]] = []
         self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
+        self._path_resolved_callbacks: List[Callable[[str, int], None]] = []
 
         # Ensure ~/.reticulum/config has TCP Client Interface enabled as default (crucial for mobile / Phosh)
         self._ensure_tcp_default_config()
@@ -254,6 +256,76 @@ class ReticulumService:
     def add_announce_callback(self, cb: Callable[[Dict[str, Any]], None]):
         self._announce_callbacks.append(cb)
 
+    def add_path_resolved_callback(self, cb: Callable[[str, int], None]):
+        self._path_resolved_callbacks.append(cb)
+
+    def request_path(
+        self,
+        dest_hex: str,
+        callback: Optional[Callable[[str, Optional[int], bool], None]] = None
+    ):
+        """Send a path request packet for a destination hash and monitor for response.
+        callback(dest_hex, hops, is_new_response)
+        """
+        dest_hex = dest_hex.strip().lower()
+        try:
+            dest_bytes = bytes.fromhex(dest_hex)
+        except Exception as e:
+            RNS.log(f"Retchat: Invalid destination hash {dest_hex}: {e}", RNS.LOG_ERROR)
+            if callback:
+                GLib.idle_add(callback, dest_hex, None, False)
+            return
+
+        def _worker():
+            try:
+                t_start = time.time()
+                RNS.Transport.request_path(dest_bytes)
+                RNS.log(f"Retchat: Path requested for {dest_hex}", RNS.LOG_INFO)
+
+                # Wait up to 6 seconds for a fresh path response
+                deadline = time.time() + 6.0
+                while time.time() < deadline:
+                    if dest_bytes in RNS.Transport.path_table:
+                        entry = RNS.Transport.path_table[dest_bytes]
+                        # entry[0] is timestamp when path entry was created or updated
+                        if entry and entry[0] >= t_start:
+                            hops = RNS.Transport.hops_to(dest_bytes)
+                            if hops == RNS.Transport.PATHFINDER_M:
+                                hops = 0
+                            self.db.add_or_update_conversation(dest_hash=dest_hex, hops=hops)
+                            GLib.idle_add(self._notify_path_resolved, dest_hex, hops)
+                            if callback:
+                                GLib.idle_add(callback, dest_hex, hops, True)
+                            return
+                    time.sleep(0.1)
+
+                # If no fresh response arrived, check if an existing cached path exists
+                if dest_bytes in RNS.Transport.path_table:
+                    hops = RNS.Transport.hops_to(dest_bytes)
+                    if hops == RNS.Transport.PATHFINDER_M:
+                        hops = 0
+                    self.db.add_or_update_conversation(dest_hash=dest_hex, hops=hops)
+                    GLib.idle_add(self._notify_path_resolved, dest_hex, hops)
+                    if callback:
+                        GLib.idle_add(callback, dest_hex, hops, False)
+                else:
+                    if callback:
+                        GLib.idle_add(callback, dest_hex, None, False)
+            except Exception as e:
+                RNS.log(f"Retchat: Error during path request for {dest_hex}: {e}", RNS.LOG_ERROR)
+                if callback:
+                    GLib.idle_add(callback, dest_hex, None, False)
+
+        threading.Thread(target=_worker, daemon=True, name=f"PathReq-{dest_hex[:8]}").start()
+
+    def _notify_path_resolved(self, dest_hex: str, hops: int) -> bool:
+        for cb in self._path_resolved_callbacks:
+            try:
+                cb(dest_hex, hops)
+            except Exception as e:
+                RNS.log(f"Retchat: Error in path resolved callback: {e}", RNS.LOG_ERROR)
+        return False
+
     # --- Announce Handling ---
     def received_announce(
         self,
@@ -279,9 +351,11 @@ class ReticulumService:
                     except Exception:
                         pass
 
-            # Only track lxmf.delivery announces for chat peers
-            if aspect != "lxmf.delivery" and aspect is not None:
-                return
+            # Only track lxmf.delivery announces for general announce discovery,
+            # but allow path responses and existing conversations through
+            if not is_path_response and not self.db.get_conversation(dest_hex):
+                if aspect != "lxmf.delivery" and aspect is not None:
+                    return
 
             display_name = None
             if app_data:
@@ -328,6 +402,15 @@ class ReticulumService:
                 "receiving_interface": iface_str,
                 "last_seen": now
             }
+
+            # If this is a path response or conversation peer, update hops and notify
+            if is_path_response or self.db.get_conversation(dest_hex):
+                self.db.add_or_update_conversation(
+                    dest_hash=dest_hex,
+                    display_name=display_name,
+                    hops=hops
+                )
+                GLib.idle_add(self._notify_path_resolved, dest_hex, hops)
 
             # Dispatch to UI thread
             GLib.idle_add(self._notify_announce, announce_data)

@@ -76,6 +76,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.add_message_received_callback(self._on_service_message_received)
         self.service.add_message_state_callback(self._on_service_message_state)
         self.service.add_announce_callback(self._on_service_announce_received)
+        self.service.add_path_resolved_callback(self._on_service_path_resolved)
 
         # Initial data loading
         self._ensure_default_contact()
@@ -83,20 +84,23 @@ class RetchatWindow(Adw.ApplicationWindow):
         self._load_announces()
 
     def _setup_actions(self):
-        # Action: Copy Hash
-        action_copy = Gio.SimpleAction.new("chat.copy_hash", None)
-        action_copy.connect("activate", lambda _a, _p: self._action_copy_hash())
-        self.add_action(action_copy)
+        # Action: Copy Hash (win.copy_hash)
+        self.action_copy = Gio.SimpleAction.new("copy_hash", None)
+        self.action_copy.connect("activate", lambda _a, _p: self._action_copy_hash())
+        self.action_copy.set_enabled(False)
+        self.add_action(self.action_copy)
 
-        # Action: Rename Contact
-        action_rename = Gio.SimpleAction.new("chat.rename", None)
-        action_rename.connect("activate", lambda _a, _p: self._action_rename_contact())
-        self.add_action(action_rename)
+        # Action: Rename Contact (win.rename)
+        self.action_rename = Gio.SimpleAction.new("rename", None)
+        self.action_rename.connect("activate", lambda _a, _p: self._action_rename_contact())
+        self.action_rename.set_enabled(False)
+        self.add_action(self.action_rename)
 
-        # Action: Request Path
-        action_path = Gio.SimpleAction.new("chat.request_path", None)
-        action_path.connect("activate", lambda _a, _p: self._action_request_path())
-        self.add_action(action_path)
+        # Action: Request Path (win.request_path)
+        self.action_path = Gio.SimpleAction.new("request_path", None)
+        self.action_path.connect("activate", lambda _a, _p: self._action_request_path())
+        self.action_path.set_enabled(False)
+        self.add_action(self.action_path)
 
     # --- UI Builders ---
     def _build_sidebar(self) -> Gtk.Widget:
@@ -272,6 +276,9 @@ class RetchatWindow(Adw.ApplicationWindow):
             conv = self.db.add_or_update_conversation(dest_hash=dest_hash)
 
         self.current_dest_hash = dest_hash
+        self.action_copy.set_enabled(True)
+        self.action_rename.set_enabled(True)
+        self.action_path.set_enabled(True)
         self.db.clear_unread_count(dest_hash)
 
         # Update row badge
@@ -359,6 +366,16 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.announce_rows[dest_hash] = row
             self.announce_list_box.prepend(row)
 
+    def _on_service_path_resolved(self, dest_hex: str, hops: int):
+        dest_hex = dest_hex.lower()
+        conv = self.db.get_conversation(dest_hex)
+        if not conv:
+            return
+        if dest_hex in self.conv_rows:
+            self.conv_rows[dest_hex].update_data(conv)
+        if self.current_dest_hash == dest_hex:
+            self.chat_view.update_header(conv)
+
     # --- Dialog Openers ---
     def _show_new_chat_dialog(self):
         dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created)
@@ -394,62 +411,73 @@ class RetchatWindow(Adw.ApplicationWindow):
     def _action_rename_contact(self):
         if not self.current_dest_hash:
             return
-        conv = self.db.get_conversation(self.current_dest_hash)
+        dest_hash = self.current_dest_hash
+        conv = self.db.get_conversation(dest_hash)
         current_name = (conv.get("custom_name") or conv.get("display_name") or "") if conv else ""
 
-        # Simple input dialog
-        dialog = Adw.Window(transient_for=self, modal=True)
-        dialog.set_title("Kontakt umbenennen")
-        dialog.set_default_size(360, 180)
-        dialog.set_resizable(False)
-
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        box.set_margin_top(16)
-        box.set_margin_bottom(16)
-        box.set_margin_start(16)
-        box.set_margin_end(16)
+        dialog = Adw.AlertDialog(
+            heading="Kontakt umbenennen",
+            body=f"Geben Sie einen Anzeigenamen für diesen Kontakt ein:\n{dest_hash}"
+        )
+        dialog.add_response("cancel", "Abbrechen")
+        dialog.add_response("save", "Speichern")
+        dialog.set_response_appearance("save", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("save")
+        dialog.set_close_response("cancel")
 
         entry = Gtk.Entry()
-        entry.set_placeholder_text("Neuer Name")
+        entry.set_placeholder_text("Neuer Name (leer = Standard)")
         entry.set_text(current_name)
-        box.append(entry)
+        entry.set_activates_default(True)
+        entry.set_margin_start(12)
+        entry.set_margin_end(12)
+        dialog.set_extra_child(entry)
 
-        btn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        btn_box.set_halign(Gtk.Align.END)
+        def on_response(dlg, response):
+            if response == "save":
+                new_name = entry.get_text().strip()
+                self.db.set_custom_name(dest_hash, new_name if new_name else None)
+                self._load_conversations()
+                updated_conv = self.db.get_conversation(dest_hash)
+                if updated_conv and hasattr(self.chat_view, "update_header"):
+                    self.chat_view.update_header(updated_conv)
+                if new_name:
+                    self._show_toast(f"Kontakt umbenannt in «{new_name}»")
+                else:
+                    self._show_toast("Kontaktname zurückgesetzt")
 
-        cancel_btn = Gtk.Button(label="Abbrechen")
-        cancel_btn.connect("clicked", lambda _b: dialog.close())
-        btn_box.append(cancel_btn)
-
-        save_btn = Gtk.Button(label="Speichern")
-        save_btn.add_css_class("suggested-action")
-
-        def _do_save(_b):
-            new_name = entry.get_text().strip()
-            self.db.set_custom_name(self.current_dest_hash, new_name)
-            dialog.close()
-            self._load_conversations()
-            if self.current_dest_hash:
-                self.open_conversation(self.current_dest_hash)
-            self._show_toast("Name aktualisiert!")
-
-        save_btn.connect("clicked", _do_save)
-        entry.connect("activate", _do_save)
-        btn_box.append(save_btn)
-
-        box.append(btn_box)
-        dialog.set_content(box)
-        dialog.present()
+        dialog.connect("response", on_response)
+        dialog.present(self)
 
     def _action_request_path(self):
         if not self.current_dest_hash:
             return
-        try:
-            dest_bytes = bytes.fromhex(self.current_dest_hash)
-            RNS.Transport.request_path(dest_bytes)
-            self._show_toast("Pfadanfrage im Mesh gesendet...")
-        except Exception as e:
-            self._show_toast(f"Fehler: {e}")
+        dest_hex = self.current_dest_hash
+        short_hash = f"{dest_hex[:8]}...{dest_hex[-4:]}"
+        self._show_toast(f"Pfadanfrage für {short_hash} im Mesh gesendet...")
+
+        def on_path_result(target_hex: str, hops: Optional[int], is_new: bool):
+            if hops is not None:
+                if hops == 0:
+                    hops_desc = "Direkt erreichbar (0 Hops)"
+                else:
+                    hops_desc = f"{hops} Hop{'s' if hops > 1 else ''} entfernt"
+
+                if is_new:
+                    self._show_toast(f"Pfad bestätigt: {hops_desc}")
+                else:
+                    self._show_toast(f"Bekannter Pfad: {hops_desc}")
+            else:
+                self._show_toast(f"Keine Antwort für {short_hash} (Ziel evtl. offline)")
+
+            conv = self.db.get_conversation(target_hex)
+            if conv:
+                if target_hex in self.conv_rows:
+                    self.conv_rows[target_hex].update_data(conv)
+                if self.current_dest_hash == target_hex:
+                    self.chat_view.update_header(conv)
+
+        self.service.request_path(dest_hex, callback=on_path_result)
 
     def _show_toast(self, text: str):
         toast = Adw.Toast.new(text)

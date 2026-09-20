@@ -194,7 +194,7 @@ class Database:
             )
             conn.commit()
 
-    def set_custom_name(self, dest_hash: str, custom_name: str):
+    def set_custom_name(self, dest_hash: str, custom_name: Optional[str]):
         dest_hash = dest_hash.lower()
         with self._get_conn() as conn:
             conn.execute(

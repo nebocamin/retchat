@@ -95,33 +95,45 @@ class ChatView(Gtk.Box):
         self.append(self.composer_box)
 
     def _build_menu(self):
-        menu = Gio = None
         from gi.repository import Gio
         menu_model = Gio.Menu()
-        menu_model.append("Ziel-Hash kopieren", "chat.copy_hash")
-        menu_model.append("Kontakt umbenennen", "chat.rename")
-        menu_model.append("Pfad anfragen (Request Path)", "chat.request_path")
+        menu_model.append("Ziel-Hash kopieren", "win.copy_hash")
+        menu_model.append("Kontakt umbenennen", "win.rename")
+        menu_model.append("Pfad im Mesh anfragen", "win.request_path")
         self.menu_btn.set_menu_model(menu_model)
 
     def set_back_button_visible(self, visible: bool):
         self.back_btn.set_visible(visible)
+
+    def update_header(self, conv_data: Optional[Dict[str, Any]] = None):
+        if conv_data:
+            self.current_conv_data = conv_data
+        if not self.current_conv_data:
+            return
+
+        custom_name = self.current_conv_data.get("custom_name")
+        display_name = self.current_conv_data.get("display_name")
+        dest_hash = self.current_dest_hash or self.current_conv_data.get("destination_hash", "")
+
+        title = custom_name or display_name or f"[{dest_hash[:8]}...{dest_hash[-4:]}]"
+        hops = self.current_conv_data.get("hops")
+        if hops is None:
+            hops_str = "Pfad unbekannt"
+        elif hops == 0:
+            hops_str = "Direkt erreichbar"
+        else:
+            hops_str = f"{hops} Hop{'s' if hops > 1 else ''} entfernt"
+        subtitle = f"{hops_str} • {dest_hash[:16]}..."
+
+        self.window_title.set_title(title)
+        self.window_title.set_subtitle(subtitle)
 
     def load_conversation(self, conv_data: Dict[str, Any], messages: List[Dict[str, Any]]):
         self.current_conv_data = conv_data
         self.current_dest_hash = conv_data["destination_hash"].lower()
 
         # Update header title
-        custom_name = conv_data.get("custom_name")
-        display_name = conv_data.get("display_name")
-        dest_hash = self.current_dest_hash
-
-        title = custom_name or display_name or f"[{dest_hash[:8]}...{dest_hash[-4:]}]"
-        hops = conv_data.get("hops", 0)
-        hops_str = "Lokal erreichbar" if hops == 0 else f"{hops} Hop{'s' if hops > 1 else ''} entfernt"
-        subtitle = f"{hops_str} • {dest_hash[:16]}..."
-
-        self.window_title.set_title(title)
-        self.window_title.set_subtitle(subtitle)
+        self.update_header(conv_data)
 
         # Clear existing bubbles
         while child := self.messages_box.get_first_child():
