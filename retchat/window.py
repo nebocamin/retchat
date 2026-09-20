@@ -102,6 +102,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_path.set_enabled(False)
         self.add_action(self.action_path)
 
+        # Action: Announce (win.announce)
+        self.action_announce = Gio.SimpleAction.new("announce", None)
+        self.action_announce.connect("activate", lambda _a, _p: self._action_announce_self())
+        self.add_action(self.action_announce)
+
     # --- UI Builders ---
     def _build_sidebar(self) -> Gtk.Widget:
         sidebar_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -120,9 +125,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         title_widget = Adw.WindowTitle(title="Retchat", subtitle="Reticulum Mesh")
         header.set_title_widget(title_widget)
 
-        # Interfaces status button
+        # Interfaces & Mesh status button
         iface_btn = Gtk.Button(icon_name="network-wireless-symbolic")
-        iface_btn.set_tooltip_text("Reticulum Schnittstellen & Status")
+        iface_btn.set_tooltip_text("Schnittstellen, TCP-Hub & Mesh-Announce")
         iface_btn.connect("clicked", lambda _b: self._show_interfaces_dialog())
         header.pack_end(iface_btn)
 
@@ -190,6 +195,12 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.announce_empty_page.set_description(
             "Sobald Teilnehmer im Reticulum-Netzwerk ein Announce senden, erscheinen sie hier."
         )
+        empty_announce_btn = Gtk.Button(label="Selbst im Mesh ankündigen")
+        empty_announce_btn.add_css_class("suggested-action")
+        empty_announce_btn.add_css_class("pill")
+        empty_announce_btn.set_halign(Gtk.Align.CENTER)
+        empty_announce_btn.connect("clicked", lambda _b: self._action_announce_self())
+        self.announce_empty_page.set_child(empty_announce_btn)
         self.announce_list_box.set_placeholder(self.announce_empty_page)
 
         announce_scroll.set_child(self.announce_list_box)
@@ -478,6 +489,13 @@ class RetchatWindow(Adw.ApplicationWindow):
                     self.chat_view.update_header(conv)
 
         self.service.request_path(dest_hex, callback=on_path_result)
+
+    def _action_announce_self(self):
+        try:
+            self.service.announce()
+            self._show_toast("Announce wurde im Reticulum-Mesh gesendet!")
+        except Exception as e:
+            self._show_toast(f"Fehler beim Announce: {e}")
 
     def _show_toast(self, text: str):
         toast = Adw.Toast.new(text)

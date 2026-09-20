@@ -18,6 +18,7 @@ class InterfacesDialog(Adw.PreferencesWindow):
         self.set_title("Reticulum Schnittstellen & Status")
         self.set_default_size(360, 520)
         self.set_size_request(280, 360)
+        self.iface_rows: List[Gtk.Widget] = []
 
         self.page = Adw.PreferencesPage()
 
@@ -53,7 +54,26 @@ class InterfacesDialog(Adw.PreferencesWindow):
 
         self.page.add(group_tcp)
 
-        # 2. Active Interfaces Status
+        # 2. Mesh Presence & Announce
+        group_announce = Adw.PreferencesGroup()
+        group_announce.set_title("Mesh-Präsenz (Announce)")
+        group_announce.set_description(
+            "Kündigt deine Zieladresse im Reticulum-Netzwerk an, damit Peers dich finden können."
+        )
+
+        announce_row = Adw.ActionRow(
+            title="Jetzt im Mesh ankündigen",
+            subtitle=f"Anzeigename: {self.service.display_name or 'Unbenannt'}"
+        )
+        announce_btn = Gtk.Button(label="Ankündigen", valign=Gtk.Align.CENTER)
+        announce_btn.add_css_class("suggested-action")
+        announce_btn.connect("clicked", self._on_announce_clicked)
+        announce_row.add_suffix(announce_btn)
+        group_announce.add(announce_row)
+
+        self.page.add(group_announce)
+
+        # 3. Active Interfaces Status
         self.group = Adw.PreferencesGroup()
         self.group.set_title("Aktive Interfaces")
         self.group.set_description(
@@ -75,16 +95,29 @@ class InterfacesDialog(Adw.PreferencesWindow):
         toast.set_timeout(3)
         self.add_toast(toast)
 
+    def _on_announce_clicked(self, _btn):
+        try:
+            self.service.announce()
+            toast = Adw.Toast.new("Announce wurde im Reticulum-Mesh gesendet!")
+            toast.set_timeout(2)
+            self.add_toast(toast)
+        except Exception as e:
+            toast = Adw.Toast.new(f"Fehler beim Announce: {e}")
+            toast.set_timeout(3)
+            self.add_toast(toast)
+
     def refresh_interfaces(self):
-        # Clear existing rows
-        while child := self.group.get_first_child():
-            self.group.remove(child)
+        # Clear existing rows safely
+        for row in self.iface_rows:
+            self.group.remove(row)
+        self.iface_rows.clear()
 
         interfaces = self.service.get_interfaces_info()
 
         if not interfaces:
             empty_row = Adw.ActionRow(title="Keine aktiven Schnittstellen gefunden")
             self.group.add(empty_row)
+            self.iface_rows.append(empty_row)
             return
 
         for iface in interfaces:
@@ -113,6 +146,7 @@ class InterfacesDialog(Adw.PreferencesWindow):
             row.add_suffix(status_box)
 
             self.group.add(row)
+            self.iface_rows.append(row)
 
     def _format_bytes(self, num_bytes: int) -> str:
         if num_bytes < 1024:
