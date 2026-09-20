@@ -53,6 +53,9 @@ class ReticulumService:
         self._message_state_callbacks: List[Callable[[str, int], None]] = []
         self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
 
+        # Ensure ~/.reticulum/config has TCP Client Interface enabled as default (crucial for mobile / Phosh)
+        self._ensure_tcp_default_config()
+
         # Reticulum and LXMRouter initialization
         self.rns = RNS.Reticulum()
         self.router = LXMF.LXMRouter(identity=self.identity, storagepath=self.storage_path)
@@ -63,6 +66,156 @@ class ReticulumService:
 
         # Register announce handler
         RNS.Transport.register_announce_handler(self)
+
+    def _ensure_tcp_default_config(self):
+        """Ensure ~/.reticulum/config exists with TCP enabled as default for mobile/cellular networks."""
+        try:
+            cfg_dir = os.path.expanduser("~/.reticulum")
+            if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
+                cfg_dir = os.path.expanduser("~/.config/reticulum")
+            os.makedirs(cfg_dir, exist_ok=True)
+            cfg_path = os.path.join(cfg_dir, "config")
+
+            default_host = "sideband.connect.reticulum.network"
+            default_port = "7822"
+
+            from RNS.vendor.configobj import ConfigObj
+
+            if not os.path.exists(cfg_path):
+                cfg = ConfigObj()
+                cfg.filename = cfg_path
+                cfg["reticulum"] = {
+                    "enable_transport": "True",
+                    "share_instance": "Yes",
+                    "instance_name": "default"
+                }
+                cfg["logging"] = {
+                    "loglevel": "4"
+                }
+                cfg["interfaces"] = {
+                    "Default TCP Client": {
+                        "type": "TCPClientInterface",
+                        "enabled": "yes",
+                        "target_host": default_host,
+                        "target_port": default_port
+                    },
+                    "Default Interface": {
+                        "type": "AutoInterface",
+                        "enabled": "no"
+                    }
+                }
+                cfg.write()
+                RNS.log("Retchat: Created mobile-friendly default Reticulum config with TCP enabled", RNS.LOG_NOTICE)
+            else:
+                cfg = ConfigObj(cfg_path)
+                interfaces = cfg.get("interfaces", {})
+                has_tcp = False
+                for name, iface in interfaces.items():
+                    if isinstance(iface, dict) and iface.get("type") in ("TCPClientInterface", "TCPInterface"):
+                        en = str(iface.get("enabled", iface.get("interface_enabled", "true"))).lower()
+                        if en in ("true", "yes", "1"):
+                            has_tcp = True
+                            break
+                if not has_tcp:
+                    if "interfaces" not in cfg:
+                        cfg["interfaces"] = {}
+                    cfg["interfaces"]["Default TCP Client"] = {
+                        "type": "TCPClientInterface",
+                        "enabled": "yes",
+                        "target_host": default_host,
+                        "target_port": default_port
+                    }
+                    cfg.write()
+                    RNS.log("Retchat: Added default TCP Client interface to existing config", RNS.LOG_NOTICE)
+        except Exception as e:
+            RNS.log(f"Retchat: Error initializing default TCP config: {e}", RNS.LOG_WARNING)
+
+    def get_tcp_settings(self) -> Dict[str, Any]:
+        """Read TCP and AutoInterface settings from ~/.reticulum/config."""
+        cfg_dir = os.path.expanduser("~/.reticulum")
+        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
+            cfg_dir = os.path.expanduser("~/.config/reticulum")
+        cfg_path = os.path.join(cfg_dir, "config")
+
+        default_host = "sideband.connect.reticulum.network"
+        default_port = "7822"
+        disable_auto = False
+
+        if os.path.exists(cfg_path):
+            try:
+                from RNS.vendor.configobj import ConfigObj
+                cfg = ConfigObj(cfg_path)
+                interfaces = cfg.get("interfaces", {})
+                for name, iface in interfaces.items():
+                    if isinstance(iface, dict) and iface.get("type") in ("TCPClientInterface", "TCPInterface"):
+                        host = iface.get("target_host")
+                        port = iface.get("target_port")
+                        if host:
+                            default_host = str(host)
+                        if port:
+                            default_port = str(port)
+                        break
+                auto_iface = interfaces.get("Default Interface")
+                if isinstance(auto_iface, dict):
+                    en = str(auto_iface.get("enabled", auto_iface.get("interface_enabled", "true"))).lower()
+                    if en in ("false", "no", "0"):
+                        disable_auto = True
+            except Exception:
+                pass
+
+        return {
+            "host": default_host,
+            "port": default_port,
+            "disable_auto": disable_auto,
+            "config_path": cfg_path
+        }
+
+    def save_tcp_settings(self, host: str, port: str, disable_auto: bool) -> str:
+        """Update ~/.reticulum/config with TCP interface and AutoInterface preferences."""
+        cfg_dir = os.path.expanduser("~/.reticulum")
+        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
+            cfg_dir = os.path.expanduser("~/.config/reticulum")
+        cfg_path = os.path.join(cfg_dir, "config")
+
+        from RNS.vendor.configobj import ConfigObj
+        cfg = ConfigObj(cfg_path) if os.path.exists(cfg_path) else ConfigObj()
+        cfg.filename = cfg_path
+
+        if "reticulum" not in cfg:
+            cfg["reticulum"] = {
+                "enable_transport": "True",
+                "share_instance": "Yes",
+                "instance_name": "default"
+            }
+        if "interfaces" not in cfg:
+            cfg["interfaces"] = {}
+
+        # Update or add TCP interface
+        tcp_key = None
+        for name, iface in cfg["interfaces"].items():
+            if isinstance(iface, dict) and iface.get("type") in ("TCPClientInterface", "TCPInterface"):
+                tcp_key = name
+                break
+        if not tcp_key:
+            tcp_key = "Default TCP Client"
+            cfg["interfaces"][tcp_key] = {"type": "TCPClientInterface"}
+
+        cfg["interfaces"][tcp_key]["type"] = "TCPClientInterface"
+        cfg["interfaces"][tcp_key]["enabled"] = "yes"
+        cfg["interfaces"][tcp_key]["target_host"] = host.strip()
+        cfg["interfaces"][tcp_key]["target_port"] = port.strip()
+
+        # Update AutoInterface
+        if "Default Interface" in cfg["interfaces"]:
+            cfg["interfaces"]["Default Interface"]["enabled"] = "no" if disable_auto else "yes"
+        elif disable_auto:
+            cfg["interfaces"]["Default Interface"] = {
+                "type": "AutoInterface",
+                "enabled": "no"
+            }
+
+        cfg.write()
+        return cfg_path
 
         RNS.log(
             f"Retchat: ReticulumService initialised. Identity: {self.identity.hash.hex()}, "

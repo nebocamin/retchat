@@ -20,16 +20,60 @@ class InterfacesDialog(Adw.PreferencesWindow):
         self.set_size_request(280, 360)
 
         self.page = Adw.PreferencesPage()
+
+        # 1. TCP Configuration for Mobile / Phosh
+        group_tcp = Adw.PreferencesGroup()
+        group_tcp.set_title("TCP-Verbindung (Standard für Mobilfunk / Phosh)")
+        group_tcp.set_description(
+            "Da Mobilfunk- und mobile WLAN-Netzwerke kein Multicast (AutoInterface) unterstützen, "
+            "verbindet sich Retchat standardmäßig über TCP mit dem Reticulum-Netzwerk."
+        )
+
+        tcp_settings = self.service.get_tcp_settings()
+
+        self.tcp_host_row = Adw.EntryRow(title="TCP Server / Hub")
+        self.tcp_host_row.set_text(tcp_settings.get("host", "sideband.connect.reticulum.network"))
+        group_tcp.add(self.tcp_host_row)
+
+        self.tcp_port_row = Adw.EntryRow(title="Port")
+        self.tcp_port_row.set_text(str(tcp_settings.get("port", "7822")))
+        group_tcp.add(self.tcp_port_row)
+
+        self.disable_auto_row = Adw.SwitchRow(title="AutoInterface (Multicast) deaktivieren")
+        self.disable_auto_row.set_subtitle("Empfohlen auf Telefonen zur Vermeidung von Socket- und Übertragungsfehlern")
+        self.disable_auto_row.set_active(tcp_settings.get("disable_auto", True))
+        group_tcp.add(self.disable_auto_row)
+
+        save_row = Adw.ActionRow(title="TCP-Einstellungen in ~/.reticulum/config speichern")
+        save_btn = Gtk.Button(label="Speichern", valign=Gtk.Align.CENTER)
+        save_btn.add_css_class("suggested-action")
+        save_btn.connect("clicked", self._on_save_tcp_clicked)
+        save_row.add_suffix(save_btn)
+        group_tcp.add(save_row)
+
+        self.page.add(group_tcp)
+
+        # 2. Active Interfaces Status
         self.group = Adw.PreferencesGroup()
         self.group.set_title("Aktive Interfaces")
         self.group.set_description(
-            "Übersicht aller in ~/.reticulum/config konfigurierten Netzwerk- und Funk-Schnittstellen."
+            "Übersicht aller aktuell im Reticulum-Router aktiven Schnittstellen."
         )
 
         self.page.add(self.group)
         self.add(self.page)
 
         self.refresh_interfaces()
+
+    def _on_save_tcp_clicked(self, _btn):
+        host = self.tcp_host_row.get_text().strip() or "sideband.connect.reticulum.network"
+        port = self.tcp_port_row.get_text().strip() or "7822"
+        disable_auto = self.disable_auto_row.get_active()
+
+        path = self.service.save_tcp_settings(host, port, disable_auto)
+        toast = Adw.Toast.new(f"Gespeichert! Bitte Retchat neu starten, um Schnittstellen neu zu laden.")
+        toast.set_timeout(3)
+        self.add_toast(toast)
 
     def refresh_interfaces(self):
         # Clear existing rows
