@@ -1186,7 +1186,7 @@ class ReticulumService:
                 })
         return results
 
-    def add_rrc_hub(self, hub_hex: str, name: Optional[str] = None, initial_room: str = "#general") -> Tuple[bool, str]:
+    def add_rrc_hub(self, hub_hex: str, name: Optional[str] = None, initial_room: Optional[str] = None) -> Tuple[bool, str]:
         """Add and connect to an RRC hub by destination hash."""
         if not self.app or not hasattr(self.app, "rrc") or not self.app.rrc:
             return False, "RRC-Backend nicht bereit"
