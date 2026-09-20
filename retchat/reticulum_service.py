@@ -849,6 +849,121 @@ class ReticulumService:
         except Exception:
             return "unbekannt", None
 
+    def get_configured_interfaces(self) -> List[Dict[str, Any]]:
+        """Read all configured interfaces from ~/.reticulum/config, cross-referenced with live status."""
+        cfg_dir = os.path.expanduser("~/.reticulum")
+        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
+            cfg_dir = os.path.expanduser("~/.config/reticulum")
+        cfg_path = os.path.join(cfg_dir, "config")
+
+        if not os.path.exists(cfg_path):
+            return []
+
+        from RNS.vendor.configobj import ConfigObj
+        try:
+            cfg = ConfigObj(cfg_path)
+            raw_interfaces = cfg.get("interfaces", {})
+        except Exception as e:
+            RNS.log(f"Retchat: Error reading interfaces from config: {e}", RNS.LOG_ERROR)
+            return []
+
+        live_by_name = {}
+        for iface in RNS.Transport.interfaces:
+            name = getattr(iface, "name", str(iface))
+            live_by_name[name] = iface
+
+        results = []
+        for name, c in raw_interfaces.items():
+            if not isinstance(c, dict):
+                continue
+            itype = c.get("type", "UnknownInterface")
+
+            en = str(c.get("enabled", "")).lower()
+            ifen = str(c.get("interface_enabled", "")).lower()
+            b_en = en in ("true", "yes", "1")
+            b_ifen = ifen in ("true", "yes", "1")
+            is_enabled = b_en or b_ifen
+
+            live_iface = live_by_name.get(name)
+            is_online = getattr(live_iface, "online", False) if live_iface else False
+            rxb = getattr(live_iface, "rxb", 0) if live_iface else 0
+            txb = getattr(live_iface, "txb", 0) if live_iface else 0
+
+            details = []
+            if itype in ("TCPClientInterface", "TCPInterface"):
+                host = c.get("target_host") or ""
+                port = c.get("target_port") or ""
+                if host:
+                    details.append(f"{host}:{port}")
+            elif itype == "RNodeInterface":
+                port = c.get("port") or ""
+                freq = c.get("frequency")
+                if port:
+                    details.append(f"Port: {port}")
+                if freq:
+                    try:
+                        freq_mhz = int(freq) / 1000000.0
+                        details.append(f"{freq_mhz:.3f} MHz")
+                    except Exception:
+                        pass
+            elif itype == "AutoInterface":
+                details.append("Lokales Multicast")
+
+            results.append({
+                "name": name,
+                "type": itype,
+                "enabled": is_enabled,
+                "online": is_online,
+                "rxb": rxb,
+                "txb": txb,
+                "details": " • ".join(details) if details else itype,
+                "config": dict(c)
+            })
+
+        return results
+
+    def set_interface_enabled(self, name: str, enabled: bool) -> bool:
+        """Toggle an interface enabled/disabled in ~/.reticulum/config and update live state."""
+        cfg_dir = os.path.expanduser("~/.reticulum")
+        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
+            cfg_dir = os.path.expanduser("~/.config/reticulum")
+        cfg_path = os.path.join(cfg_dir, "config")
+
+        if not os.path.exists(cfg_path):
+            return False
+
+        from RNS.vendor.configobj import ConfigObj
+        try:
+            cfg = ConfigObj(cfg_path)
+            if "interfaces" not in cfg or name not in cfg["interfaces"]:
+                return False
+
+            iface_cfg = cfg["interfaces"][name]
+            if enabled:
+                iface_cfg["enabled"] = "yes"
+                iface_cfg["interface_enabled"] = "true"
+            else:
+                iface_cfg["enabled"] = "no"
+                iface_cfg["interface_enabled"] = "false"
+
+            cfg.write()
+
+            # Dynamic live update: if disabling, detach it so it stops reconnecting / holding ports
+            if not enabled:
+                for iface in RNS.Transport.interfaces:
+                    if getattr(iface, "name", None) == name:
+                        try:
+                            if hasattr(iface, "detach"):
+                                iface.detach()
+                            iface.online = False
+                            RNS.log(f"Retchat: Detached interface '{name}'", RNS.LOG_NOTICE)
+                        except Exception as e:
+                            RNS.log(f"Retchat: Error detaching interface '{name}': {e}", RNS.LOG_WARNING)
+            return True
+        except Exception as e:
+            RNS.log(f"Retchat: Failed to toggle interface '{name}': {e}", RNS.LOG_ERROR)
+            return False
+
     def get_interfaces_info(self) -> List[Dict[str, Any]]:
         result = []
         for iface in RNS.Transport.interfaces:

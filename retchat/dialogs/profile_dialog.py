@@ -1,6 +1,4 @@
-"""Profile and Identity dialog."""
-
-from typing import Callable
+from typing import Callable, Optional
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -9,15 +7,24 @@ from gi.repository import Gtk, Adw, Gdk
 
 from retchat.reticulum_service import ReticulumService
 
+_BaseDialog = Adw.PreferencesDialog if hasattr(Adw, "PreferencesDialog") else Adw.PreferencesWindow
 
-class ProfileDialog(Adw.PreferencesWindow):
+
+class ProfileDialog(_BaseDialog):
     def __init__(self, parent_window: Gtk.Window, service: ReticulumService, on_profile_updated: Callable[[], None]):
-        super().__init__(transient_for=parent_window, modal=True)
+        self._parent = parent_window
+        if _BaseDialog is Adw.PreferencesWindow:
+            super().__init__(transient_for=parent_window, modal=True)
+            self.set_default_size(360, 520)
+        else:
+            super().__init__()
+            if hasattr(self, "set_content_width"):
+                self.set_content_width(360)
+                self.set_content_height(520)
 
         self.service = service
         self.on_profile_updated = on_profile_updated
         self.set_title("Eigene Identität & Profil")
-        self.set_default_size(360, 520)
         self.set_size_request(280, 360)
 
         page = Adw.PreferencesPage()
@@ -33,7 +40,7 @@ class ProfileDialog(Adw.PreferencesWindow):
         self.name_row.set_text(self.service.display_name)
         group_profile.add(self.name_row)
 
-        save_row = Adw.ActionRow(title="Namen speichern & im Mesh ankündigen")
+        save_row = Adw.ActionRow(title="Namen speichern und im Mesh ankündigen")
         save_btn = Gtk.Button(label="Speichern", valign=Gtk.Align.CENTER)
         save_btn.add_css_class("suggested-action")
         save_btn.connect("clicked", self._on_save_name_clicked)
@@ -90,6 +97,19 @@ class ProfileDialog(Adw.PreferencesWindow):
 
         page.add(group_announce)
 
+        # Group 4: Close / Done
+        group_close = Adw.PreferencesGroup()
+        close_row = Adw.ActionRow()
+        close_btn = Gtk.Button(label="Schließen", valign=Gtk.Align.CENTER)
+        close_btn.add_css_class("suggested-action")
+        close_btn.add_css_class("pill")
+        close_btn.set_hexpand(True)
+        close_btn.connect("clicked", lambda _b: self.close())
+        close_row.add_suffix(close_btn)
+        group_close.add(close_row)
+
+        page.add(group_close)
+
         self.add(page)
 
     def _on_save_name_clicked(self, _btn):
@@ -112,3 +132,11 @@ class ProfileDialog(Adw.PreferencesWindow):
         toast = Adw.Toast.new(message)
         toast.set_timeout(2)
         self.add_toast(toast)
+
+    def present(self, parent: Optional[Gtk.Widget] = None):
+        target = parent or self._parent
+        if hasattr(Adw, "PreferencesDialog") and isinstance(self, Adw.PreferencesDialog):
+            super().present(target)
+        else:
+            super().present()
+
