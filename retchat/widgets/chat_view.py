@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List, Optional
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, GLib, Gdk
+from gi.repository import Gtk, Adw, GLib
 
 from retchat.widgets.message_bubble import MessageBubble
 
@@ -31,9 +31,16 @@ class ChatView(Gtk.Box):
         self.current_conv_data: Optional[Dict[str, Any]] = None
         self.bubble_widgets: Dict[str, MessageBubble] = {}
 
-        # 1. Header Bar (Adw.HeaderBar automatically provides back button in collapsed mode)
+        # 1. Header Bar
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
+
+        # Back / Sidebar Toggle button
+        self.back_btn = Gtk.Button(icon_name="go-previous-symbolic")
+        self.back_btn.set_tooltip_text("Zurück zu den Chats")
+        self.back_btn.add_css_class("flat")
+        self.back_btn.connect("clicked", lambda _b: self.on_back_clicked())
+        self.header_bar.pack_start(self.back_btn)
 
         # Window Title
         self.window_title = Adw.WindowTitle(title="Chat", subtitle="")
@@ -47,25 +54,25 @@ class ChatView(Gtk.Box):
 
         self.append(self.header_bar)
 
-        # 2. Scrolled Messages Container
-        self.scrolled_window = Gtk.ScrolledWindow()
-        self.scrolled_window.set_vexpand(True)
+        # 2. Scrolled Messages Container with Adw.Clamp (like Meshy)
+        self.scrolled_window = Gtk.ScrolledWindow(vexpand=True)
         self.scrolled_window.set_hexpand(True)
         self.scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-
-        self._auto_scroll = True
-        self.vadj = self.scrolled_window.get_vadjustment()
-        self.vadj.connect("value-changed", self._on_scroll_value_changed)
-        self.vadj.connect("changed", self._on_adj_changed)
 
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.messages_box.set_margin_top(12)
         self.messages_box.set_margin_bottom(18)
         self.messages_box.set_margin_start(16)
         self.messages_box.set_margin_end(16)
-        self.messages_box.set_vexpand(True)
-        self.scrolled_window.set_child(self.messages_box)
 
+        clamp = Adw.Clamp(maximum_size=700, child=self.messages_box)
+        self.scrolled_window.set_child(clamp)
+        self._is_at_bottom = True
+        vadj = self.scrolled_window.get_vadjustment()
+        if vadj:
+            vadj.connect("value-changed", self._on_scroll_value_changed)
+            vadj.connect("notify::upper", self._on_bounds_changed)
+            vadj.connect("notify::page-size", self._on_bounds_changed)
         self.append(self.scrolled_window)
 
         # 3. Composer Box
@@ -83,7 +90,6 @@ class ChatView(Gtk.Box):
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
         self.entry.connect("notify::has-focus", self._on_entry_focus)
-        self.entry.connect("changed", self._on_entry_changed)
         self.composer_box.append(self.entry)
 
         # Send Button
@@ -105,8 +111,16 @@ class ChatView(Gtk.Box):
         menu_model.append("Ziel-Hash kopieren", "win.copy_hash")
         self.menu_btn.set_menu_model(menu_model)
 
+    def set_back_button_mode(self, is_collapsed: bool):
+        if is_collapsed:
+            self.back_btn.set_icon_name("go-previous-symbolic")
+            self.back_btn.set_tooltip_text("Zurück zu den Chats")
+        else:
+            self.back_btn.set_icon_name("sidebar-show-symbolic")
+            self.back_btn.set_tooltip_text("Seitenleiste ein-/ausblenden")
+
     def set_back_button_visible(self, visible: bool):
-        self.header_bar.set_show_back_button(visible)
+        self.back_btn.set_visible(visible)
 
     def update_header(self, conv_data: Optional[Dict[str, Any]] = None):
         if conv_data:
@@ -139,7 +153,6 @@ class ChatView(Gtk.Box):
         self.update_header(conv_data)
 
         # Clear existing bubbles
-        self._auto_scroll = True
         while child := self.messages_box.get_first_child():
             self.messages_box.remove(child)
         self.bubble_widgets.clear()
@@ -149,7 +162,7 @@ class ChatView(Gtk.Box):
             self._add_bubble_widget(msg)
 
         # Scroll to bottom
-        self.scroll_to_bottom()
+        self._scroll_to_bottom()
 
         # Focus text entry
         self.entry.grab_focus()
@@ -170,52 +183,42 @@ class ChatView(Gtk.Box):
             return
 
         self._add_bubble_widget(msg_data)
-        if self._auto_scroll:
-            self.scroll_to_bottom()
+        if self._is_at_bottom or msg_data.get("is_outgoing", False):
+            self._scroll_to_bottom()
 
     def update_message_state(self, message_hash: str, state: int):
         if message_hash in self.bubble_widgets:
             self.bubble_widgets[message_hash].update_state(state)
 
+    def _scroll_to_bottom(self):
+        self._is_at_bottom = True
+        adj = self.scrolled_window.get_vadjustment()
+        if adj:
+            adj.set_value(adj.get_upper())
+        return False
+
+    _scroll_after_layout = _scroll_to_bottom
+
     def _on_scroll_value_changed(self, adj):
         max_val = adj.get_upper() - adj.get_page_size()
         if max_val <= 0:
-            self._auto_scroll = True
+            self._is_at_bottom = True
         else:
             diff = max_val - adj.get_value()
-            self._auto_scroll = (diff <= 80)
+            self._is_at_bottom = (diff <= 60.0)
 
-    def _on_adj_changed(self, adj):
-        if self._auto_scroll:
-            max_val = adj.get_upper() - adj.get_page_size()
-            if max_val > 0:
-                adj.set_value(max_val)
+    def _on_bounds_changed(self, adj, _pspec):
+        if getattr(self, "_is_at_bottom", True):
+            adj.set_value(adj.get_upper())
 
     def _on_entry_focus(self, entry, _pspec):
         if entry.has_focus():
-            self._auto_scroll = True
-            self.scroll_to_bottom()
-
-    def _on_entry_changed(self, _entry):
-        if not self._auto_scroll:
-            self._auto_scroll = True
-            self.scroll_to_bottom()
-
-    def scroll_to_bottom(self):
-        self._auto_scroll = True
-        adj = self.scrolled_window.get_vadjustment()
-        if adj:
-            max_val = adj.get_upper() - adj.get_page_size()
-            if max_val > 0:
-                adj.set_value(max_val)
-            else:
-                adj.set_value(0)
+            self._scroll_to_bottom()
 
     def _on_send_clicked(self, _widget):
         text = self.entry.get_text().strip()
         if not text or not self.current_dest_hash:
             return
         self.entry.set_text("")
-        self._auto_scroll = True
-        self.scroll_to_bottom()
+        self._scroll_to_bottom()
         self.on_send_message(self.current_dest_hash, text)

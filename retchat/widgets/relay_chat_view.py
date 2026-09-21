@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, List, Optional
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Pango, Gdk, Gio
+from gi.repository import Gtk, Adw, Pango, Gio, GLib
 
 NICK_COLORS = [
     "#3584e4",  # blue
@@ -54,9 +54,16 @@ class RelayChatView(Gtk.Box):
         self.current_hub_name: str = ""
         self._displayed_keys: set = set()
 
-        # 1. Header Bar (Adw.HeaderBar automatically provides back button in collapsed mode)
+        # 1. Header Bar
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
+
+        # Back / Sidebar Toggle button
+        self.back_btn = Gtk.Button(icon_name="go-previous-symbolic")
+        self.back_btn.set_tooltip_text("Zurück zu den Chats")
+        self.back_btn.add_css_class("flat")
+        self.back_btn.connect("clicked", lambda _b: self.on_back_clicked() if self.on_back_clicked else None)
+        self.header_bar.pack_start(self.back_btn)
 
         # Window Title
         self.window_title = Adw.WindowTitle(title="Relay-Chat", subtitle="")
@@ -92,23 +99,24 @@ class RelayChatView(Gtk.Box):
         chat_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         chat_box.set_vexpand(True)
 
-        self.scrolled_window = Gtk.ScrolledWindow()
-        self.scrolled_window.set_vexpand(True)
+        self.scrolled_window = Gtk.ScrolledWindow(vexpand=True)
         self.scrolled_window.set_hexpand(True)
         self.scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-
-        self._auto_scroll = True
-        self.vadj = self.scrolled_window.get_vadjustment()
-        self.vadj.connect("value-changed", self._on_scroll_value_changed)
-        self.vadj.connect("changed", self._on_adj_changed)
 
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         self.messages_box.set_margin_top(12)
         self.messages_box.set_margin_bottom(18)
-        self.messages_box.set_margin_start(10)
-        self.messages_box.set_margin_end(10)
-        self.messages_box.set_vexpand(True)
-        self.scrolled_window.set_child(self.messages_box)
+        self.messages_box.set_margin_start(16)
+        self.messages_box.set_margin_end(16)
+
+        clamp = Adw.Clamp(maximum_size=700, child=self.messages_box)
+        self.scrolled_window.set_child(clamp)
+        self._is_at_bottom = True
+        vadj = self.scrolled_window.get_vadjustment()
+        if vadj:
+            vadj.connect("value-changed", self._on_scroll_value_changed)
+            vadj.connect("notify::upper", self._on_bounds_changed)
+            vadj.connect("notify::page-size", self._on_bounds_changed)
         chat_box.append(self.scrolled_window)
 
         # Composer Box
@@ -125,12 +133,13 @@ class RelayChatView(Gtk.Box):
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
         self.entry.connect("notify::has-focus", self._on_entry_focus)
-        self.entry.connect("changed", self._on_entry_changed)
         self.composer_box.append(self.entry)
 
         self.send_btn = Gtk.Button(icon_name="mail-send-symbolic")
         self.send_btn.add_css_class("suggested-action")
         self.send_btn.add_css_class("circular")
+        self.send_btn.set_focusable(False)
+        self.send_btn.set_focus_on_click(False)
         self.send_btn.set_tooltip_text("Nachricht senden (Enter)")
         self.send_btn.connect("clicked", self._on_send_clicked)
         self.composer_box.append(self.send_btn)
@@ -223,7 +232,6 @@ class RelayChatView(Gtk.Box):
 
         self.update_members(members)
 
-        self._auto_scroll = True
         while child := self.messages_box.get_first_child():
             self.messages_box.remove(child)
         self._displayed_keys.clear()
@@ -233,6 +241,7 @@ class RelayChatView(Gtk.Box):
 
         self.view_stack.set_visible_child_name("room_chat")
         self._scroll_to_bottom()
+        self.entry.grab_focus()
 
     def load_hub(
         self,
@@ -435,7 +444,44 @@ class RelayChatView(Gtk.Box):
             row_box.append(bubble)
             self.messages_box.append(row_box)
 
-        if scroll_to_bottom and self._auto_scroll:
+        if scroll_to_bottom:
+            self._scroll_to_bottom()
+
+    def set_back_button_mode(self, is_collapsed: bool):
+        if is_collapsed:
+            self.back_btn.set_icon_name("go-previous-symbolic")
+            self.back_btn.set_tooltip_text("Zurück zu den Chats")
+        else:
+            self.back_btn.set_icon_name("sidebar-show-symbolic")
+            self.back_btn.set_tooltip_text("Seitenleiste ein-/ausblenden")
+
+    def set_back_button_visible(self, visible: bool):
+        self.back_btn.set_visible(visible)
+
+    def _scroll_to_bottom(self):
+        self._is_at_bottom = True
+        adj = self.scrolled_window.get_vadjustment()
+        if adj:
+            adj.set_value(adj.get_upper())
+        return False
+
+    _scroll_after_layout = _scroll_to_bottom
+    scroll_to_bottom = _scroll_to_bottom
+
+    def _on_scroll_value_changed(self, adj):
+        max_val = adj.get_upper() - adj.get_page_size()
+        if max_val <= 0:
+            self._is_at_bottom = True
+        else:
+            diff = max_val - adj.get_value()
+            self._is_at_bottom = (diff <= 60.0)
+
+    def _on_bounds_changed(self, adj, _pspec):
+        if getattr(self, "_is_at_bottom", True):
+            adj.set_value(adj.get_upper())
+
+    def _on_entry_focus(self, entry, _pspec):
+        if entry.has_focus():
             self._scroll_to_bottom()
 
     def _on_send_clicked(self, _widget):
@@ -444,42 +490,6 @@ class RelayChatView(Gtk.Box):
             return
 
         if self.current_hub_hash and self.current_room:
-            self._auto_scroll = True
+            self.entry.set_text("")
             self._scroll_to_bottom()
             self.on_send_message(self.current_hub_hash, self.current_room, text)
-            self.entry.set_text("")
-            self.entry.grab_focus()
-
-    def _on_scroll_value_changed(self, adj):
-        max_val = adj.get_upper() - adj.get_page_size()
-        if max_val <= 0:
-            self._auto_scroll = True
-        else:
-            diff = max_val - adj.get_value()
-            self._auto_scroll = (diff <= 80)
-
-    def _on_adj_changed(self, adj):
-        if self._auto_scroll:
-            max_val = adj.get_upper() - adj.get_page_size()
-            if max_val > 0:
-                adj.set_value(max_val)
-
-    def _on_entry_focus(self, entry, _pspec):
-        if entry.has_focus():
-            self._auto_scroll = True
-            self._scroll_to_bottom()
-
-    def _on_entry_changed(self, _entry):
-        if not self._auto_scroll:
-            self._auto_scroll = True
-            self._scroll_to_bottom()
-
-    def _scroll_to_bottom(self):
-        self._auto_scroll = True
-        adj = self.scrolled_window.get_vadjustment()
-        if adj:
-            max_val = adj.get_upper() - adj.get_page_size()
-            if max_val > 0:
-                adj.set_value(max_val)
-            else:
-                adj.set_value(0)

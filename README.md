@@ -13,7 +13,7 @@ Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über
   - Das Fenster lässt sich flexibel bis auf 300px Breite verkleinern.
   - Auf Telefonen klappt die Ansicht in eine intuitive Einzelansicht (Seitenleiste ↔ Chat) mit automatischem Zurück-Button um.
 - 🎨 **Modernes GNOME / Libadwaita HIG Design**:
-  - Responsives `Adw.NavigationSplitView`.
+  - Responsives `Adw.OverlaySplitView` mit Wischgesten und proportionaler Skalierung (inspiriert von Parla).
   - Sprechblasen mit nativer Light- und Dark-Theme-Anpassung.
   - Avatare mit Initialen, Zeitstempeln und Hop-Zählern.
 - 📬 **LXMF-Nachrichtenversand & Empfangsbestätigungen**:
@@ -93,7 +93,7 @@ retchat/
 ├── retchat.svg                   # Anwendungs-Icon
 ├── retchat/
 │   ├── app.py                    # Adw.Application Lebenszyklus & CSS-Lader
-│   ├── window.py                 # Hauptfenster (NavigationSplitView, Breakpoints)
+│   ├── window.py                 # Hauptfenster (OverlaySplitView, Breakpoints)
 │   ├── database.py               # SQLite-Speicher (Unterhaltungen, Nachrichten, Announces)
 │   ├── reticulum_service.py      # Reticulum & LXMF-Service, Dispatcher & Callbacks
 │   ├── style.css                 # Libadwaita-CSS (Chat-Bubbles, Badges, Composer)

@@ -32,7 +32,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         self.set_title("Retchat")
         self.set_default_size(860, 640)
-        self.set_size_request(300, 360)
+        self.set_size_request(240, 180)
 
         self.current_dest_hash: Optional[str] = None
         self.current_relay_hub_hash: Optional[str] = None
@@ -46,20 +46,20 @@ class RetchatWindow(Adw.ApplicationWindow):
         # Toast Overlay
         self.toast_overlay = Adw.ToastOverlay()
 
-        # Split View (Sidebar + Content)
-        self.split_view = Adw.NavigationSplitView()
-        self.split_view.set_min_sidebar_width(240)
+        # Split View (Sidebar + Content using Adw.OverlaySplitView)
+        self.split_view = Adw.OverlaySplitView()
+        self.split_view.set_min_sidebar_width(260)
         self.split_view.set_max_sidebar_width(380)
+        self.split_view.set_sidebar_width_fraction(0.32)
+        self.split_view.set_enable_show_gesture(True)
+        self.split_view.set_enable_hide_gesture(True)
 
         # Build Sidebar and Content
         sidebar_widget = self._build_sidebar()
         content_widget = self._build_content()
 
-        sidebar_page = Adw.NavigationPage.new(sidebar_widget, "Unterhaltungen")
-        content_page = Adw.NavigationPage.new(content_widget, "Chat")
-
-        self.split_view.set_sidebar(sidebar_page)
-        self.split_view.set_content(content_page)
+        self.split_view.set_sidebar(sidebar_widget)
+        self.split_view.set_content(content_widget)
 
         # Mobile Breakpoint (e.g. for Phosh / PostmarketOS or narrow screens)
         breakpoint = Adw.Breakpoint.new(
@@ -68,8 +68,22 @@ class RetchatWindow(Adw.ApplicationWindow):
         breakpoint.add_setter(self.split_view, "collapsed", True)
         self.add_breakpoint(breakpoint)
 
+        # Narrow screen breakpoint (prevents min-sidebar-width from forcing window wide on mobile)
+        narrow_bp = Adw.Breakpoint.new(
+            Adw.BreakpointCondition.parse("max-width: 320px")
+        )
+        narrow_bp.add_setter(self.split_view, "min-sidebar-width", 220.0)
+        self.add_breakpoint(narrow_bp)
+
+        self.split_view.connect("notify::collapsed", self._on_split_collapsed_changed)
+
+        # Initially show sidebar
+        self.split_view.set_show_sidebar(True)
+
         self.toast_overlay.set_child(self.split_view)
         self.set_content(self.toast_overlay)
+
+        self._update_back_buttons()
 
         # Setup GActions for window
         self._setup_actions()
@@ -292,6 +306,16 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
 
         # 1. Empty placeholder page
+        empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        empty_header = Adw.HeaderBar()
+        empty_header.add_css_class("flat")
+        self.empty_sidebar_btn = Gtk.Button(icon_name="sidebar-show-symbolic")
+        self.empty_sidebar_btn.set_tooltip_text("Seitenleiste ein-/ausblenden")
+        self.empty_sidebar_btn.add_css_class("flat")
+        self.empty_sidebar_btn.connect("clicked", lambda _b: self._on_chat_back_clicked())
+        empty_header.pack_start(self.empty_sidebar_btn)
+        empty_box.append(empty_header)
+
         empty_page = Adw.StatusPage()
         empty_page.set_icon_name("network-wireless-symbolic")
         empty_page.set_title("Retchat")
@@ -305,8 +329,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         empty_btn.set_halign(Gtk.Align.CENTER)
         empty_btn.connect("clicked", lambda _b: self._show_new_chat_dialog())
         empty_page.set_child(empty_btn)
+        empty_box.append(empty_page)
 
-        self.content_stack.add_named(empty_page, "empty")
+        self.content_stack.add_named(empty_box, "empty")
 
         # 2. Chat View
         self.chat_view = ChatView(
@@ -436,11 +461,35 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.chat_view.load_conversation(conv, messages)
         self.content_stack.set_visible_child_name("chat")
 
-        # Show content in collapsed mode
-        self.split_view.set_show_content(True)
+        # In collapsed (mobile) mode, hide sidebar overlay so chat takes over
+        if self.split_view.get_collapsed():
+            self.split_view.set_show_sidebar(False)
 
     def _on_chat_back_clicked(self):
-        self.split_view.set_show_content(False)
+        if self.split_view.get_collapsed():
+            self.split_view.set_show_sidebar(True)
+        else:
+            self.split_view.set_show_sidebar(not self.split_view.get_show_sidebar())
+
+    def _on_split_collapsed_changed(self, split_view, _pspec):
+        is_collapsed = split_view.get_collapsed()
+        if not is_collapsed:
+            split_view.set_show_sidebar(True)
+        else:
+            if self.current_dest_hash or self.current_relay_room or self.current_relay_hub_hash:
+                split_view.set_show_sidebar(False)
+            else:
+                split_view.set_show_sidebar(True)
+        self._update_back_buttons()
+
+    def _update_back_buttons(self):
+        is_collapsed = self.split_view.get_collapsed()
+        if hasattr(self, "chat_view"):
+            self.chat_view.set_back_button_mode(is_collapsed)
+        if hasattr(self, "relay_chat_view"):
+            self.relay_chat_view.set_back_button_mode(is_collapsed)
+        if hasattr(self, "empty_sidebar_btn"):
+            self.empty_sidebar_btn.set_visible(not is_collapsed)
 
     # --- Relay Chat Management ---
     def _load_relay_rooms(self, query: Optional[str] = None):
@@ -582,7 +631,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         )
 
         self.content_stack.set_visible_child_name("relay_chat")
-        self.split_view.set_show_content(True)
+        if self.split_view.get_collapsed():
+            self.split_view.set_show_sidebar(False)
 
     def open_relay_hub(self, hub_hash: str):
         hub_hash = hub_hash.lower()
@@ -630,7 +680,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         )
 
         self.content_stack.set_visible_child_name("relay_chat")
-        self.split_view.set_show_content(True)
+        if self.split_view.get_collapsed():
+            self.split_view.set_show_sidebar(False)
 
     def _show_join_channel_dialog(self, hub_hash: str, hub_name: Optional[str] = None):
         if not hub_name:
@@ -746,7 +797,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.remove_rrc_hub(hub_hash)
         if self.current_relay_hub_hash == hub_hash:
             self.content_stack.set_visible_child_name("empty")
-            self.split_view.set_show_content(False)
+            if self.split_view.get_collapsed():
+                self.split_view.set_show_sidebar(True)
             self.current_relay_hub_hash = None
             self.current_relay_room = None
             self.action_relay_reconnect.set_enabled(False)
