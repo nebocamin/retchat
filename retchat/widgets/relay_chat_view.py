@@ -30,7 +30,7 @@ def get_nick_color(nick: str) -> str:
     return NICK_COLORS[idx]
 
 
-class RelayChatView(Gtk.Box):
+class RelayChatView(Adw.Bin):
     def __init__(
         self,
         on_send_message: Callable[[str, str, str], None],
@@ -40,7 +40,7 @@ class RelayChatView(Gtk.Box):
         on_join_channel_requested: Optional[Callable[[str, str], None]] = None,
         on_channel_selected: Optional[Callable[[str, str], None]] = None
     ):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        super().__init__()
 
         self.on_send_message = on_send_message
         self.on_part_room = on_part_room
@@ -54,7 +54,10 @@ class RelayChatView(Gtk.Box):
         self.current_hub_name: str = ""
         self._displayed_keys: set = set()
 
-        # 1. Header Bar
+        self.toolbar_view = Adw.ToolbarView()
+        self.set_child(self.toolbar_view)
+
+        # 1. Header Bar (Top Bar)
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
 
@@ -88,16 +91,15 @@ class RelayChatView(Gtk.Box):
         self._build_menu()
         self.header_bar.pack_end(self.menu_btn)
 
-        self.append(self.header_bar)
+        self.toolbar_view.add_top_bar(self.header_bar)
 
         # View Stack: Room Chat vs Hub Overview
         self.view_stack = Gtk.Stack()
         self.view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.view_stack.set_vexpand(True)
 
-        # --- View 1: Room Chat ---
-        chat_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        chat_box.set_vexpand(True)
+        # --- View 1: Room Chat (ToolbarView with ScrolledWindow and Bottom Bar) ---
+        room_toolbar = Adw.ToolbarView()
 
         self.scrolled_window = Gtk.ScrolledWindow(vexpand=True)
         self.scrolled_window.set_hexpand(True)
@@ -117,23 +119,21 @@ class RelayChatView(Gtk.Box):
             vadj.connect("value-changed", self._on_scroll_value_changed)
             vadj.connect("notify::upper", self._on_bounds_changed)
             vadj.connect("notify::page-size", self._on_bounds_changed)
-        chat_box.append(self.scrolled_window)
+        room_toolbar.set_content(self.scrolled_window)
 
-        # Composer Box
-        self.composer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.composer_box.add_css_class("composer-bar")
-        self.composer_box.set_margin_top(8)
-        self.composer_box.set_margin_bottom(12)
-        self.composer_box.set_margin_start(10)
-        self.composer_box.set_margin_end(10)
+        # Composer Bottom Bar
+        composer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        composer_box.set_margin_top(8)
+        composer_box.set_margin_bottom(8)
+        composer_box.set_margin_start(12)
+        composer_box.set_margin_end(12)
 
         self.entry = Gtk.Entry()
-        self.entry.set_width_chars(1)
         self.entry.set_placeholder_text("Nachricht schreiben (oder /me, /who, /part)...")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
         self.entry.connect("notify::has-focus", self._on_entry_focus)
-        self.composer_box.append(self.entry)
+        composer_box.append(self.entry)
 
         self.send_btn = Gtk.Button(icon_name="mail-send-symbolic")
         self.send_btn.add_css_class("suggested-action")
@@ -142,10 +142,16 @@ class RelayChatView(Gtk.Box):
         self.send_btn.set_focus_on_click(False)
         self.send_btn.set_tooltip_text("Nachricht senden (Enter)")
         self.send_btn.connect("clicked", self._on_send_clicked)
-        self.composer_box.append(self.send_btn)
+        composer_box.append(self.send_btn)
 
-        chat_box.append(self.composer_box)
-        self.view_stack.add_named(chat_box, "room_chat")
+        clamp_composer = Adw.Clamp(maximum_size=700, child=composer_box)
+        self.bottom_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.bottom_bar.add_css_class("chat-bottom-bar")
+        self.bottom_bar.append(clamp_composer)
+        room_toolbar.add_bottom_bar(self.bottom_bar)
+
+        self.view_stack.add_named(room_toolbar, "room_chat")
+        self.toolbar_view.set_content(self.view_stack)
 
         # --- View 2: Hub Overview ---
         self.hub_overview_scroll = Gtk.ScrolledWindow()
@@ -199,8 +205,6 @@ class RelayChatView(Gtk.Box):
 
         self.hub_overview_scroll.set_child(self.hub_overview_box)
         self.view_stack.add_named(self.hub_overview_scroll, "hub_overview")
-
-        self.append(self.view_stack)
 
     def _build_menu(self):
         menu_model = Gio.Menu()
@@ -445,7 +449,7 @@ class RelayChatView(Gtk.Box):
             self.messages_box.append(row_box)
 
         if scroll_to_bottom:
-            self._scroll_to_bottom()
+            self._scroll_after_layout()
 
     def set_back_button_mode(self, is_collapsed: bool):
         if is_collapsed:
@@ -465,8 +469,11 @@ class RelayChatView(Gtk.Box):
             adj.set_value(adj.get_upper())
         return False
 
-    _scroll_after_layout = _scroll_to_bottom
-    scroll_to_bottom = _scroll_to_bottom
+    def _scroll_after_layout(self):
+        self._is_at_bottom = True
+        GLib.idle_add(self._scroll_to_bottom)
+
+    scroll_to_bottom = _scroll_after_layout
 
     def _on_scroll_value_changed(self, adj):
         max_val = adj.get_upper() - adj.get_page_size()
@@ -482,7 +489,7 @@ class RelayChatView(Gtk.Box):
 
     def _on_entry_focus(self, entry, _pspec):
         if entry.has_focus():
-            self._scroll_to_bottom()
+            self._scroll_after_layout()
 
     def _on_send_clicked(self, _widget):
         text = self.entry.get_text().strip()
@@ -491,5 +498,5 @@ class RelayChatView(Gtk.Box):
 
         if self.current_hub_hash and self.current_room:
             self.entry.set_text("")
-            self._scroll_to_bottom()
+            self._scroll_after_layout()
             self.on_send_message(self.current_hub_hash, self.current_room, text)

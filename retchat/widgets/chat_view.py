@@ -10,7 +10,7 @@ from gi.repository import Gtk, Adw, GLib
 from retchat.widgets.message_bubble import MessageBubble
 
 
-class ChatView(Gtk.Box):
+class ChatView(Adw.Bin):
     def __init__(
         self,
         on_back_clicked: Callable[[], None],
@@ -19,7 +19,7 @@ class ChatView(Gtk.Box):
         on_copy_hash: Callable[[str], None],
         on_request_path: Callable[[str], None]
     ):
-        super().__init__(orientation=Gtk.Orientation.VERTICAL)
+        super().__init__()
 
         self.on_back_clicked = on_back_clicked
         self.on_send_message = on_send_message
@@ -31,7 +31,10 @@ class ChatView(Gtk.Box):
         self.current_conv_data: Optional[Dict[str, Any]] = None
         self.bubble_widgets: Dict[str, MessageBubble] = {}
 
-        # 1. Header Bar
+        self.toolbar_view = Adw.ToolbarView()
+        self.set_child(self.toolbar_view)
+
+        # 1. Header Bar (Top Bar)
         self.header_bar = Adw.HeaderBar()
         self.header_bar.add_css_class("flat")
 
@@ -52,9 +55,9 @@ class ChatView(Gtk.Box):
         self._build_menu()
         self.header_bar.pack_end(self.menu_btn)
 
-        self.append(self.header_bar)
+        self.toolbar_view.add_top_bar(self.header_bar)
 
-        # 2. Scrolled Messages Container with Adw.Clamp (like Meshy)
+        # 2. Scrolled Messages Container (Content)
         self.scrolled_window = Gtk.ScrolledWindow(vexpand=True)
         self.scrolled_window.set_hexpand(True)
         self.scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -73,24 +76,22 @@ class ChatView(Gtk.Box):
             vadj.connect("value-changed", self._on_scroll_value_changed)
             vadj.connect("notify::upper", self._on_bounds_changed)
             vadj.connect("notify::page-size", self._on_bounds_changed)
-        self.append(self.scrolled_window)
+        self.toolbar_view.set_content(self.scrolled_window)
 
-        # 3. Composer Box
-        self.composer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        self.composer_box.add_css_class("composer-bar")
-        self.composer_box.set_margin_top(8)
-        self.composer_box.set_margin_bottom(12)
-        self.composer_box.set_margin_start(10)
-        self.composer_box.set_margin_end(10)
+        # 3. Bottom Bar with Message Composer
+        composer_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        composer_box.set_margin_top(8)
+        composer_box.set_margin_bottom(8)
+        composer_box.set_margin_start(12)
+        composer_box.set_margin_end(12)
 
         # Text Entry
         self.entry = Gtk.Entry()
-        self.entry.set_width_chars(1)
         self.entry.set_placeholder_text("Nachricht über Reticulum verfassen...")
         self.entry.set_hexpand(True)
         self.entry.connect("activate", self._on_send_clicked)
         self.entry.connect("notify::has-focus", self._on_entry_focus)
-        self.composer_box.append(self.entry)
+        composer_box.append(self.entry)
 
         # Send Button
         self.send_btn = Gtk.Button(icon_name="mail-send-symbolic")
@@ -98,9 +99,13 @@ class ChatView(Gtk.Box):
         self.send_btn.add_css_class("circular")
         self.send_btn.set_tooltip_text("Nachricht senden (Enter)")
         self.send_btn.connect("clicked", self._on_send_clicked)
-        self.composer_box.append(self.send_btn)
+        composer_box.append(self.send_btn)
 
-        self.append(self.composer_box)
+        clamp_composer = Adw.Clamp(maximum_size=700, child=composer_box)
+        self.bottom_bar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.bottom_bar.add_css_class("chat-bottom-bar")
+        self.bottom_bar.append(clamp_composer)
+        self.toolbar_view.add_bottom_bar(self.bottom_bar)
 
     def _build_menu(self):
         from gi.repository import Gio
@@ -161,8 +166,8 @@ class ChatView(Gtk.Box):
         for msg in messages:
             self._add_bubble_widget(msg)
 
-        # Scroll to bottom
-        self._scroll_to_bottom()
+        # Scroll to bottom after layout
+        self._scroll_after_layout()
 
         # Focus text entry
         self.entry.grab_focus()
@@ -173,7 +178,7 @@ class ChatView(Gtk.Box):
         self.messages_box.append(bubble)
 
     def append_message(self, msg_data: Dict[str, Any]):
-        if msg_data.get("conversation_hash", "").lower() != (self.current_dest_hash or ""):
+        if msg_data.get("conversation_hash", "").lower() != (self.current_dest_hash or "").lower():
             return
 
         # Check if already present
@@ -184,7 +189,7 @@ class ChatView(Gtk.Box):
 
         self._add_bubble_widget(msg_data)
         if self._is_at_bottom or msg_data.get("is_outgoing", False):
-            self._scroll_to_bottom()
+            self._scroll_after_layout()
 
     def update_message_state(self, message_hash: str, state: int):
         if message_hash in self.bubble_widgets:
@@ -197,7 +202,9 @@ class ChatView(Gtk.Box):
             adj.set_value(adj.get_upper())
         return False
 
-    _scroll_after_layout = _scroll_to_bottom
+    def _scroll_after_layout(self):
+        self._is_at_bottom = True
+        GLib.idle_add(self._scroll_to_bottom)
 
     def _on_scroll_value_changed(self, adj):
         max_val = adj.get_upper() - adj.get_page_size()
@@ -213,12 +220,12 @@ class ChatView(Gtk.Box):
 
     def _on_entry_focus(self, entry, _pspec):
         if entry.has_focus():
-            self._scroll_to_bottom()
+            self._scroll_after_layout()
 
     def _on_send_clicked(self, _widget):
         text = self.entry.get_text().strip()
         if not text or not self.current_dest_hash:
             return
         self.entry.set_text("")
-        self._scroll_to_bottom()
+        self._scroll_after_layout()
         self.on_send_message(self.current_dest_hash, text)

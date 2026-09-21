@@ -65,17 +65,9 @@
     color: @accent_color;
 }
 
-.composer-bar {
+.chat-bottom-bar {
     background-color: @card_bg_color;
-    border-radius: 26px;
-    padding: 4px 6px;
-    border: 1px solid alpha(currentColor, 0.1);
-}
-
-.composer-bar entry {
-    border: none;
-    background: transparent;
-    box-shadow: none;
+    border-top: 1px solid alpha(currentColor, 0.12);
 }
 
 /* Compact segmented switcher for sidebar tabs (Chats / Entdecken / Relay) */
