@@ -56,11 +56,9 @@ class ChatView(Adw.Bin):
         self.window_title = Adw.WindowTitle(title="Chat")
         header.set_title_widget(self.window_title)
 
-        menu = Gio.Menu()
-        menu.append("Pfad im Mesh anfragen", "win.request_path")
-        menu.append("Kontakt umbenennen", "win.rename")
-        menu.append("Ziel-Hash kopieren", "win.copy_hash")
-        header.pack_end(Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Optionen", menu_model=menu))
+        self.menu_btn = Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Optionen")
+        self._update_menu()
+        header.pack_end(self.menu_btn)
         return header
 
     def _build_content(self) -> Gtk.Widget:
@@ -123,7 +121,37 @@ class ChatView(Adw.Bin):
         return Adw.Clamp(child=box, maximum_size=CONTENT_MAX_WIDTH,
                          tightening_threshold=CONTENT_MAX_WIDTH - 120)
 
+    def _update_menu(self):
+        """Chat menu; the delete entry targets the currently shown contact."""
+        menu = Gio.Menu()
+        contact = Gio.Menu()
+        contact.append("Pfad im Mesh anfragen", "win.request_path")
+        contact.append("Kontakt umbenennen", "win.rename")
+        contact.append("Ziel-Hash kopieren", "win.copy_hash")
+        menu.append_section(None, contact)
+        if self.current_dest_hash:
+            danger = Gio.Menu()
+            item = Gio.MenuItem.new("Chat löschen…", None)
+            item.set_action_and_target_value(
+                "win.delete_conversation", GLib.Variant.new_string(self.current_dest_hash)
+            )
+            danger.append_item(item)
+            menu.append_section(None, danger)
+        self.menu_btn.set_menu_model(menu)
+
     # --- Public API -----------------------------------------------------------
+
+    def clear(self):
+        """Forget the shown conversation (e.g. after it was deleted)."""
+        self.current_dest_hash = None
+        self.current_conv_data = None
+        self._items = {}
+        self._clear_pending_image()
+        self.entry.set_text("")
+        self.history.replace([])
+        self.window_title.set_title("Chat")
+        self.window_title.set_subtitle("")
+        self._update_menu()
 
     def set_back_button_mode(self, is_collapsed: bool):
         if is_collapsed:
@@ -160,6 +188,7 @@ class ChatView(Adw.Bin):
         self.current_dest_hash = conv_data["destination_hash"].lower()
         self._clear_pending_image()
         self.update_header(conv_data)
+        self._update_menu()
 
         items = [MessageItem(m) for m in messages]
         self._items = {item.message_hash: item for item in items}

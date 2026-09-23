@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Gio, GLib, GObject, Gdk
+from gi.repository import Gtk, Adw, Gio, GLib, GObject, Gdk, Graphene
 
 import RNS
 from retchat.database import Database
@@ -21,6 +21,12 @@ from retchat.widgets.chat_view import ChatView
 from retchat.widgets.conversation_row import ConversationRow
 from retchat.widgets.relay_chat_view import RelayChatView
 from retchat.widgets.relay_room_row import RelayHubRow, RelayChannelRow, RelayAddChannelRow
+
+
+def _remove_rows(list_box: Gtk.ListBox):
+    """Remove all rows but keep the placeholder (remove_all() drops it too)."""
+    while row := list_box.get_row_at_index(0):
+        list_box.remove(row)
 
 
 class RetchatWindow(Adw.ApplicationWindow):
@@ -100,7 +106,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         )
 
         # Initial data loading
-        self._ensure_default_contact()
         self._load_conversations()
         self._load_announces()
         self._load_relay_rooms()
@@ -117,6 +122,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_rename.connect("activate", lambda _a, _p: self._action_rename_contact())
         self.action_rename.set_enabled(False)
         self.add_action(self.action_rename)
+
+        # Action: Delete Conversation (win.delete_conversation, target: destination hash)
+        action_delete = Gio.SimpleAction.new("delete_conversation", GLib.VariantType.new("s"))
+        action_delete.connect("activate", lambda _a, p: self._confirm_delete_conversation(p.get_string()))
+        self.add_action(action_delete)
 
         # Action: Request Path (win.request_path)
         self.action_path = Gio.SimpleAction.new("request_path", None)
@@ -257,6 +267,21 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.conv_empty_page.set_description("Starte einen Chat über das '+' Symbol oben.")
         self.conv_list_box.set_placeholder(self.conv_empty_page)
 
+        # Context menu for chat rows: right click (mouse) or long press (touch).
+        # The popover is parented to the sidebar box, not the list box: a
+        # Gtk.ListBox tries to remove every child it has, including popovers.
+        self.conv_context_menu = Gtk.PopoverMenu(has_arrow=False, halign=Gtk.Align.START)
+        self.conv_context_menu.set_parent(sidebar_box)
+        self._context_menu_anchor = sidebar_box
+
+        right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        right_click.connect("pressed", lambda g, _n, x, y: self._on_conv_context_requested(g, x, y))
+        self.conv_list_box.add_controller(right_click)
+
+        long_press = Gtk.GestureLongPress(touch_only=True)
+        long_press.connect("pressed", self._on_conv_context_requested)
+        self.conv_list_box.add_controller(long_press)
+
         conv_scroll.set_child(self.conv_list_box)
         self.sidebar_stack.add_titled(conv_scroll, "chats", "Chats")
 
@@ -371,12 +396,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.content_stack.set_visible_child_name("empty")
         return self.content_stack
 
-    # --- Pre-populating Contact ---
-    def _ensure_default_contact(self):
-        """Pre-populate the user's specified contact if not present."""
-        test_contact_hash = "8d883cfe6c1a846d8f34e5a95a149fdb"
-        self.service.start_conversation(test_contact_hash)
-
     def _on_add_button_clicked(self):
         active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
         if active_tab == "relay":
@@ -389,8 +408,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         conversations = self.service.get_conversations(query=query)
 
         # Clear existing rows
-        while child := self.conv_list_box.get_first_child():
-            self.conv_list_box.remove(child)
+        _remove_rows(self.conv_list_box)
         self.conv_rows.clear()
 
         if query:
@@ -509,8 +527,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         hubs = self.service.get_rrc_hubs()
 
         # Clear existing rows
-        while child := self.relay_list_box.get_first_child():
-            self.relay_list_box.remove(child)
+        _remove_rows(self.relay_list_box)
         self.relay_hub_rows.clear()
         self.relay_channel_rows.clear()
         self.relay_add_channel_rows.clear()
@@ -894,8 +911,7 @@ class RetchatWindow(Adw.ApplicationWindow):
     # --- Announce Discovery Management ---
     def _load_announces(self, query: Optional[str] = None):
         announces = self.service.get_announces(query=query)
-        while child := self.announce_list_box.get_first_child():
-            self.announce_list_box.remove(child)
+        _remove_rows(self.announce_list_box)
         self.announce_rows.clear()
 
         if query:
@@ -1068,6 +1084,70 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         dialog.connect("response", on_response)
         dialog.present(self)
+
+    # --- Deleting conversations ---
+    def _on_conv_context_requested(self, gesture: Gtk.Gesture, x: float, y: float):
+        row = self.conv_list_box.get_row_at_y(int(y))
+        if not isinstance(row, ConversationRow):
+            return
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)  # don't also open the chat
+
+        menu = Gio.Menu()
+        item = Gio.MenuItem.new("Chat löschen…", None)
+        item.set_action_and_target_value("win.delete_conversation", GLib.Variant.new_string(row.dest_hash))
+        menu.append_item(item)
+        self.conv_context_menu.set_menu_model(menu)
+
+        ok, point = self.conv_list_box.compute_point(self._context_menu_anchor, Graphene.Point().init(x, y))
+        if ok:
+            rect = Gdk.Rectangle()
+            rect.x, rect.y, rect.width, rect.height = int(point.x), int(point.y), 1, 1
+            self.conv_context_menu.set_pointing_to(rect)
+        self.conv_context_menu.popup()
+
+    def _contact_display_name(self, dest_hash: str) -> str:
+        conv = self.service.get_conversation(dest_hash) or {}
+        return conv.get("custom_name") or conv.get("display_name") or f"{dest_hash[:8]}…{dest_hash[-4:]}"
+
+    def _confirm_delete_conversation(self, dest_hash: str):
+        dest_hash = dest_hash.lower()
+        name = self._contact_display_name(dest_hash)
+
+        dialog = Adw.AlertDialog(
+            heading="Chat löschen?",
+            body=(f"Der Chat mit «{name}» wird mit allen Nachrichten und empfangenen Bildern "
+                  "von diesem Gerät gelöscht. Schreibt dir der Kontakt erneut, erscheint der Chat wieder."),
+        )
+        dialog.add_response("cancel", "Abbrechen")
+        dialog.add_response("delete", "Löschen")
+        dialog.set_response_appearance("delete", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r: self._delete_conversation(dest_hash, name) if r == "delete" else None)
+        dialog.present(self)
+
+    def _delete_conversation(self, dest_hash: str, name: str):
+        # Leave the chat first, so nothing touches the conversation afterwards
+        # (accessing it through the service would re-create its storage).
+        if self.current_dest_hash == dest_hash:
+            self.current_dest_hash = None
+            self.chat_view.clear()
+            for action in (self.action_copy, self.action_rename, self.action_path):
+                action.set_enabled(False)
+            self.content_stack.set_visible_child_name("empty")
+            if self.split_view.get_collapsed():
+                self.split_view.set_show_sidebar(True)
+
+        try:
+            self.service.delete_conversation(dest_hash)
+        except Exception as e:
+            self._show_toast(f"Chat konnte nicht gelöscht werden: {e}")
+            return
+
+        row = self.conv_rows.pop(dest_hash, None)
+        if row is not None:
+            self.conv_list_box.remove(row)
+        self._show_toast(f"Chat mit «{name}» gelöscht")
 
     def _action_request_path(self):
         if not self.current_dest_hash:

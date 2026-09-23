@@ -2,6 +2,8 @@
 
 import getpass
 import os
+import re
+import shutil
 import subprocess
 import threading
 import time
@@ -25,6 +27,10 @@ STATE_SENDING = 0
 STATE_SENT = 1
 STATE_DELIVERED = 2
 STATE_FAILED = 3
+
+# Truncated destination hash (16 bytes) and full LXMF message hash (32 bytes) as hex
+_HEX_DEST_RE = re.compile(r"[0-9a-f]{32}")
+_HEX_MSG_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def map_lxmf_state_to_ui(lxmf_state: int, is_outgoing: bool = False) -> int:
@@ -494,6 +500,36 @@ class ReticulumService:
     def set_custom_name(self, dest_hex: str, new_name: Optional[str]):
         dest_hex = dest_hex.strip().lower()
         self.db.set_custom_name(dest_hex, new_name)
+
+    def delete_conversation(self, dest_hex: str):
+        """Remove a contact's conversation from this device.
+
+        Deletes the stored messages (NomadNet), the attachments of those
+        messages, unread/failed markers, queued unsent messages, cached
+        objects and the local custom name. If the contact writes again, a
+        new conversation is created as usual.
+        """
+        dest_hex = dest_hex.strip().lower()
+        if not _HEX_DEST_RE.fullmatch(dest_hex):
+            raise ValueError(f"Ungültige Zieladresse: {dest_hex!r}")
+
+        # Attachments are stored per message hash; message files in the
+        # conversation directory are named by that hash.
+        conv_dir = os.path.join(self.app.conversationpath, dest_hex)
+        if os.path.isdir(conv_dir):
+            for name in os.listdir(conv_dir):
+                att_dir = os.path.join(self.app.attachmentpath, name)
+                if _HEX_MSG_RE.fullmatch(name) and os.path.isdir(att_dir):
+                    shutil.rmtree(att_dir, ignore_errors=True)
+
+        self.mark_read(dest_hex)  # drops unread/failed markers
+        Conversation.delete_conversation(dest_hex, self.app)
+
+        self._conv_cache.pop(dest_hex, None)
+        Conversation.cached_conversations.pop(dest_hex, None)
+        self._pending.pop(dest_hex, None)
+        self.db.delete_conversation(dest_hex)
+        RNS.log(f"Retchat: Deleted conversation {dest_hex}", RNS.LOG_INFO)
 
     IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.ico', '.tiff')
 
