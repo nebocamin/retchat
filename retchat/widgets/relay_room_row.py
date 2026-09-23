@@ -65,13 +65,6 @@ class RelayHubRow(Gtk.ListBoxRow):
 
         main_box.append(text_box)
 
-        # Status badge
-        self.status_badge = Gtk.Label()
-        self.status_badge.add_css_class("badge")
-        self.status_badge.set_valign(Gtk.Align.CENTER)
-        self._update_status_badge()
-        main_box.append(self.status_badge)
-
         # Quick '+' button to join channel on this hub
         self.add_btn = Gtk.Button(icon_name="list-add-symbolic")
         self.add_btn.add_css_class("flat")
@@ -81,7 +74,20 @@ class RelayHubRow(Gtk.ListBoxRow):
         self.add_btn.connect("clicked", lambda _b: self.on_add_channel(self.hub_hash, self.hub_name))
         main_box.append(self.add_btn)
 
-        # '...' menu button
+        # Hub options menu; actions live in a row-local "hub" action group
+        actions = Gio.SimpleActionGroup()
+        for name, callback in (
+            ("add-channel", lambda: self.on_add_channel(self.hub_hash, self.hub_name)),
+            ("connect", lambda: self.on_reconnect_hub(self.hub_hash)),
+            ("disconnect", lambda: self.on_disconnect_hub(self.hub_hash)),
+            ("copy-address", lambda: self.on_copy_hub_hash(self.hub_hash)),
+            ("remove", lambda: self.on_remove_hub(self.hub_hash)),
+        ):
+            action = Gio.SimpleAction.new(name, None)
+            action.connect("activate", lambda _a, _p, cb=callback: cb())
+            actions.add_action(action)
+        self.insert_action_group("hub", actions)
+
         self.menu_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
         self.menu_btn.add_css_class("flat")
         self.menu_btn.add_css_class("circular")
@@ -93,35 +99,19 @@ class RelayHubRow(Gtk.ListBoxRow):
         self.set_child(main_box)
 
     def _build_menu(self):
-        popover = Gtk.Popover()
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        box.set_margin_top(6)
-        box.set_margin_bottom(6)
-        box.set_margin_start(6)
-        box.set_margin_end(6)
-
-        def make_btn(label, icon, callback):
-            b = Gtk.Button(label=label)
-            b.add_css_class("flat")
-            if icon:
-                b.set_icon_name(icon)
-            b.set_halign(Gtk.Align.START)
-            b.connect("clicked", lambda _x: (popover.popdown(), callback()))
-            return b
-
-        box.append(make_btn("Kanal beitreten...", "list-add-symbolic", lambda: self.on_add_channel(self.hub_hash, self.hub_name)))
+        menu = Gio.Menu()
+        section = Gio.Menu()
+        section.append("Kanal beitreten…", "hub.add-channel")
         if self.is_connected:
-            box.append(make_btn("Trennen", "network-offline-symbolic", lambda: self.on_disconnect_hub(self.hub_hash)))
+            section.append("Trennen", "hub.disconnect")
         else:
-            box.append(make_btn("Verbinden", "network-wired-symbolic", lambda: self.on_reconnect_hub(self.hub_hash)))
-        box.append(make_btn("Hub-Adresse kopieren", "edit-copy-symbolic", lambda: self.on_copy_hub_hash(self.hub_hash)))
-
-        remove_btn = make_btn("Hub entfernen", "user-trash-symbolic", lambda: self.on_remove_hub(self.hub_hash))
-        remove_btn.add_css_class("destructive-action")
-        box.append(remove_btn)
-
-        popover.set_child(box)
-        self.menu_btn.set_popover(popover)
+            section.append("Verbinden", "hub.connect")
+        section.append("Hub-Adresse kopieren", "hub.copy-address")
+        menu.append_section(None, section)
+        danger = Gio.Menu()
+        danger.append("Hub entfernen", "hub.remove")
+        menu.append_section(None, danger)
+        self.menu_btn.set_menu_model(menu)
 
     def update_state(self, hub_name: str, is_connected: bool, status_text: str):
         self.hub_name = hub_name
@@ -130,26 +120,11 @@ class RelayHubRow(Gtk.ListBoxRow):
 
         self.title_label.set_text(hub_name)
         self._update_subtitle()
-        self._update_status_badge()
         self._build_menu()
 
     def _update_subtitle(self):
-        self.sub_label.set_text(f"{self.status_text} • {self.hub_hash[:8]}...")
-
-    def _update_status_badge(self):
-        self.status_badge.remove_css_class("hops-badge")
-        self.status_badge.remove_css_class("dim-label")
-        self.status_badge.remove_css_class("unread-badge")
-
-        if self.is_connected:
-            self.status_badge.set_text("Online")
-            self.status_badge.add_css_class("hops-badge")
-        elif "connecting" in self.status_text.lower() or "verbinde" in self.status_text.lower():
-            self.status_badge.set_text("Verbinde...")
-            self.status_badge.add_css_class("unread-badge")
-        else:
-            self.status_badge.set_text("Getrennt")
-            self.status_badge.add_css_class("dim-label")
+        # The connection status is shown here only (no extra badge), leaving room for the name.
+        self.sub_label.set_text(f"{self.status_text} · {self.hub_hash[:8]}…")
 
 
 class RelayChannelRow(Gtk.ListBoxRow):
@@ -180,7 +155,8 @@ class RelayChannelRow(Gtk.ListBoxRow):
         main_box.set_margin_bottom(6)
 
         # Channel Hash / Icon
-        self.icon = Gtk.Image.new_from_icon_name("chat-bubble-symbolic")
+        # App symbolic icon (speech bubble); Adwaita has no chat-bubble icon
+        self.icon = Gtk.Image.new_from_icon_name("org.selfmade.Retchat-symbolic")
         self.icon.set_pixel_size(18)
         self.icon.add_css_class("dim-label")
         main_box.append(self.icon)

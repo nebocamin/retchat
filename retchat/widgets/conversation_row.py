@@ -1,12 +1,19 @@
 """Conversation list row widget for the sidebar."""
 
 import datetime
+import re
 from typing import Any, Dict
 
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Pango, GLib
+
+
+def avatar_text(name: str) -> str:
+    """Text for Adw.Avatar initials without punctuation ("Carol (LoRa)" -> "CL", not "C(")."""
+    cleaned = re.sub(r"[^\w\s]", " ", name).strip()
+    return cleaned or name
 
 
 class ConversationRow(Gtk.ListBoxRow):
@@ -54,7 +61,7 @@ class ConversationRow(Gtk.ListBoxRow):
 
         title = custom_name or display_name or f"[{dest_hash[:8]}...{dest_hash[-4:]}]"
         self.action_row.set_title(GLib.markup_escape_text(title))
-        self.avatar.set_text(title)
+        self.avatar.set_text(avatar_text(title))
 
         # Subtitle (Last message preview)
         last_msg = conv_data.get("last_message_text", "")

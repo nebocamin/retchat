@@ -8,6 +8,8 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, GLib
 
+from retchat.widgets.conversation_row import avatar_text
+
 
 class AnnounceRow(Gtk.ListBoxRow):
     def __init__(self, announce_data: Dict[str, Any], on_start_chat: Callable[[str, str], None]):
@@ -54,7 +56,7 @@ class AnnounceRow(Gtk.ListBoxRow):
 
         title = display_name or f"[{dest_hash[:8]}...{dest_hash[-4:]}]"
         self.action_row.set_title(GLib.markup_escape_text(title))
-        self.avatar.set_text(title)
+        self.avatar.set_text(avatar_text(title))
 
         sub_parts = [f"Ziel: {dest_hash[:12]}..."]
         if iface:
