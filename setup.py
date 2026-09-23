@@ -16,6 +16,7 @@ setup(
         "msgpack",
         "nomadnet>=1.4.0",
         "qrcode>=8.0",
+        "pillow>=10.0.0",
     ],
     entry_points={
         "gui_scripts": [

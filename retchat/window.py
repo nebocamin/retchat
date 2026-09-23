@@ -304,6 +304,8 @@ class RetchatWindow(Adw.ApplicationWindow):
     def _build_content(self) -> Gtk.Widget:
         self.content_stack = Gtk.Stack()
         self.content_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.content_stack.set_vexpand(True)
+        self.content_stack.set_hexpand(True)
 
         # 1. Empty placeholder page
         empty_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -911,9 +913,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.open_conversation(dest_hash)
 
     # --- Sending Messages ---
-    def _on_send_message(self, dest_hash: str, content: str):
+    def _on_send_message(self, dest_hash: str, content: str, image_path: Optional[str] = None):
         try:
-            msg_data = self.service.send_message(dest_hash, content)
+            msg_data = self.service.send_message(dest_hash, content, image_path=image_path)
             self.chat_view.append_message(msg_data)
 
             # Update conversation list

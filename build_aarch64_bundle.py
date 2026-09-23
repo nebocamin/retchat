@@ -21,7 +21,7 @@ def main():
     pkgs = [
         "rns", "lxmf", "msgpack", "cryptography",
         "pyserial", "cffi", "pycparser", "setuptools", "wheel",
-        "nomadnet", "qrcode", "urwid", "wcwidth"
+        "nomadnet", "qrcode", "urwid", "wcwidth", "pillow"
     ]
     subprocess.run([
         "pip", "download",

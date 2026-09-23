@@ -21,7 +21,7 @@
                 "build-args": ["--share=network"]
             },
             "build-commands": [
-                "pip3 install --prefix=/app rns lxmf msgpack cryptography pyserial nomadnet qrcode urwid wcwidth setuptools wheel"
+                "pip3 install --prefix=/app rns lxmf msgpack cryptography pyserial nomadnet qrcode urwid wcwidth setuptools wheel pillow"
             ]
         },
         {

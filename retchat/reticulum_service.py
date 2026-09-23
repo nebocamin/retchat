@@ -11,9 +11,11 @@ import gi
 gi.require_version('GLib', '2.0')
 from gi.repository import GLib
 
+import msgpack
 import LXMF
 import nomadnet
 from nomadnet import Conversation
+from nomadnet.Conversation import ConversationMessage
 import RNS
 
 from retchat.database import Database
@@ -424,6 +426,15 @@ class ReticulumService:
                         last_time = last_m.get_timestamp() or last_m.sort_timestamp
                     except Exception:
                         pass
+                    try:
+                        lm_hash = last_m.get_hash().hex() if last_m.get_hash() else ""
+                        if self._find_image_for_message(last_m, lm_hash):
+                            if last_text:
+                                last_text = f"📷 {last_text}"
+                            else:
+                                last_text = "📷 Bild"
+                    except Exception:
+                        pass
 
                 hops = 0
                 try:
@@ -484,6 +495,216 @@ class ReticulumService:
         dest_hex = dest_hex.strip().lower()
         self.db.set_custom_name(dest_hex, new_name)
 
+    IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.svg', '.heic', '.ico', '.tiff')
+
+    @classmethod
+    def _is_image_data_or_file(cls, path: Optional[str] = None, data: Optional[bytes] = None, filename: str = '') -> bool:
+        if filename and filename.lower().endswith(cls.IMAGE_EXTENSIONS):
+            return True
+        header = b''
+        if data:
+            header = data[:16]
+        elif path and os.path.isfile(path):
+            try:
+                with open(path, 'rb') as f:
+                    header = f.read(16)
+            except Exception:
+                return False
+        if header.startswith(b'\x89PNG\r\n\x1a\n'):
+            return True
+        if header.startswith(b'\xff\xd8\xff'):
+            return True
+        if header.startswith(b'GIF8'):
+            return True
+        if len(header) >= 12 and header.startswith(b'RIFF') and header[8:12] == b'WEBP':
+            return True
+        if header.startswith(b'BM'):
+            return True
+        return False
+
+    def _find_image_for_message(self, m: Any, msg_hash: str) -> Optional[Dict[str, Any]]:
+        if not msg_hash:
+            return None
+
+        # 1. Check attachment directory on disk (NomadNet extracted path)
+        att_dir = os.path.join(self.app.attachmentpath, msg_hash)
+        if os.path.isdir(att_dir):
+            manifest_p = os.path.join(att_dir, "manifest")
+            if os.path.isfile(manifest_p):
+                try:
+                    with open(manifest_p, "rb") as f:
+                        manifest = msgpack.unpackb(f.read(), raw=False)
+                    for entry in manifest.get("files", []):
+                        stored_name = entry.get("stored_name", "")
+                        fname = entry.get("name", "")
+                        fpath = os.path.join(att_dir, stored_name)
+                        if os.path.isfile(fpath) and self._is_image_data_or_file(path=fpath, filename=fname):
+                            size = entry.get("size")
+                            if size is None:
+                                size = os.path.getsize(fpath)
+                            return {
+                                "path": fpath,
+                                "name": fname or "image.jpg",
+                                "size": size
+                            }
+                except Exception as e:
+                    RNS.log(f"Retchat: Error reading attachment manifest: {e}", RNS.LOG_DEBUG)
+
+            # Fallback for files in att_dir without manifest
+            try:
+                for fname in os.listdir(att_dir):
+                    if fname == "manifest":
+                        continue
+                    fpath = os.path.join(att_dir, fname)
+                    if os.path.isfile(fpath) and self._is_image_data_or_file(path=fpath, filename=fname):
+                        return {
+                            "path": fpath,
+                            "name": fname if fname.lower().endswith(self.IMAGE_EXTENSIONS) else f"{fname}.jpg",
+                            "size": os.path.getsize(fpath)
+                        }
+            except Exception:
+                pass
+
+        # 2. Check if m has in-memory fields or unstripped fields
+        try:
+            fields = m.get_fields() if hasattr(m, "get_fields") else {}
+            if fields and isinstance(fields, dict):
+                if LXMF.FIELD_IMAGE in fields:
+                    fmt, data = ConversationMessage._unpack_media_field(fields[LXMF.FIELD_IMAGE])
+                    if data and isinstance(data, bytes) and len(data) > 0:
+                        os.makedirs(att_dir, exist_ok=True)
+                        ext = ConversationMessage._ext_from_media_format(fmt, data)
+                        fname = f"image{ext}"
+                        stored_name = "file_0"
+                        fpath = os.path.join(att_dir, stored_name)
+                        with open(fpath, "wb") as f:
+                            f.write(data)
+                        try:
+                            manifest = {"files": [{"name": fname, "stored_name": stored_name, "size": len(data)}]}
+                            with open(os.path.join(att_dir, "manifest"), "wb") as mf:
+                                mf.write(msgpack.packb(manifest))
+                        except Exception:
+                            pass
+                        return {"path": fpath, "name": fname, "size": len(data)}
+
+                if LXMF.FIELD_FILE_ATTACHMENTS in fields:
+                    for idx, att in enumerate(fields[LXMF.FIELD_FILE_ATTACHMENTS]):
+                        if isinstance(att, list) and len(att) >= 2:
+                            att_name = ConversationMessage.safe_attachment_name(att[0], fallback=f"attachment_{idx}")
+                            att_data = att[1] if isinstance(att[1], bytes) else b""
+                            if self._is_image_data_or_file(data=att_data, filename=att_name):
+                                os.makedirs(att_dir, exist_ok=True)
+                                stored_name = f"file_{idx}"
+                                fpath = os.path.join(att_dir, stored_name)
+                                with open(fpath, "wb") as f:
+                                    f.write(att_data)
+                                return {"path": fpath, "name": att_name, "size": len(att_data)}
+        except Exception as e:
+            RNS.log(f"Retchat: Error extracting image from fields: {e}", RNS.LOG_DEBUG)
+
+        return None
+
+    def _extract_image_from_lxmessage(self, message: LXMF.LXMessage) -> Optional[Dict[str, Any]]:
+        msg_hash = message.hash.hex()
+        att_dir = os.path.join(self.app.attachmentpath, msg_hash)
+
+        # Check if NomadNet ingest already extracted it
+        if os.path.isdir(att_dir):
+            manifest_p = os.path.join(att_dir, "manifest")
+            if os.path.isfile(manifest_p):
+                try:
+                    with open(manifest_p, "rb") as f:
+                        manifest = msgpack.unpackb(f.read(), raw=False)
+                    for entry in manifest.get("files", []):
+                        stored_name = entry.get("stored_name", "")
+                        fname = entry.get("name", "")
+                        fpath = os.path.join(att_dir, stored_name)
+                        if os.path.isfile(fpath) and self._is_image_data_or_file(path=fpath, filename=fname):
+                            return {
+                                "path": fpath,
+                                "name": fname or "image.jpg",
+                                "size": entry.get("size", os.path.getsize(fpath))
+                            }
+                except Exception:
+                    pass
+
+        # Check fields directly on message
+        try:
+            fields = message.get_fields() if hasattr(message, "get_fields") else {}
+            if fields and isinstance(fields, dict):
+                if LXMF.FIELD_IMAGE in fields:
+                    fmt, data = ConversationMessage._unpack_media_field(fields[LXMF.FIELD_IMAGE])
+                    if data and isinstance(data, bytes) and len(data) > 0:
+                        os.makedirs(att_dir, exist_ok=True)
+                        ext = ConversationMessage._ext_from_media_format(fmt, data)
+                        fname = f"image{ext}"
+                        stored_name = "file_0"
+                        fpath = os.path.join(att_dir, stored_name)
+                        with open(fpath, "wb") as f:
+                            f.write(data)
+                        try:
+                            manifest = {"files": [{"name": fname, "stored_name": stored_name, "size": len(data)}]}
+                            with open(os.path.join(att_dir, "manifest"), "wb") as mf:
+                                mf.write(msgpack.packb(manifest))
+                        except Exception:
+                            pass
+                        return {"path": fpath, "name": fname, "size": len(data)}
+
+                if LXMF.FIELD_FILE_ATTACHMENTS in fields:
+                    for idx, att in enumerate(fields[LXMF.FIELD_FILE_ATTACHMENTS]):
+                        if isinstance(att, list) and len(att) >= 2:
+                            att_name = ConversationMessage.safe_attachment_name(att[0], fallback=f"attachment_{idx}")
+                            att_data = att[1] if isinstance(att[1], bytes) else b""
+                            if self._is_image_data_or_file(data=att_data, filename=att_name):
+                                os.makedirs(att_dir, exist_ok=True)
+                                stored_name = f"file_{idx}"
+                                fpath = os.path.join(att_dir, stored_name)
+                                with open(fpath, "wb") as f:
+                                    f.write(att_data)
+                                return {"path": fpath, "name": att_name, "size": len(att_data)}
+        except Exception as e:
+            RNS.log(f"Retchat: Error extracting live inbound image: {e}", RNS.LOG_ERROR)
+
+        return None
+
+    def _prepare_outgoing_image(self, image_path: str) -> Tuple[Optional[bytes], str, Optional[Dict[str, Any]]]:
+        try:
+            filename = os.path.basename(image_path)
+            # Try resizing/compressing with PIL if available
+            try:
+                from PIL import Image
+                import io
+                with Image.open(image_path) as im:
+                    max_dim = 800
+                    w, h = im.size
+                    if w > max_dim or h > max_dim:
+                        scale = min(max_dim / w, max_dim / h)
+                        new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
+                        resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
+                        im = im.resize(new_size, resample_filter)
+
+                    buf = io.BytesIO()
+                    try:
+                        im.save(buf, format="WEBP", quality=75)
+                        data = buf.getvalue()
+                        fmt = "webp"
+                    except Exception:
+                        buf = io.BytesIO()
+                        im_rgb = im.convert("RGB")
+                        im_rgb.save(buf, format="JPEG", quality=75)
+                        data = buf.getvalue()
+                        fmt = "jpg"
+            except Exception:
+                with open(image_path, "rb") as f:
+                    data = f.read()
+                ext = os.path.splitext(image_path)[1].lower().lstrip(".")
+                fmt = ext if ext in ("png", "jpg", "jpeg", "webp") else "jpg"
+
+            return data, fmt, {"path": image_path, "name": filename, "size": len(data)}
+        except Exception as e:
+            RNS.log(f"Retchat: Error preparing outgoing image: {e}", RNS.LOG_ERROR)
+            return None, "", None
+
     def get_messages(self, dest_hex: str) -> List[Dict[str, Any]]:
         dest_hex = dest_hex.strip().lower()
         conv = self.conversation(dest_hex)
@@ -512,6 +733,7 @@ class ReticulumService:
 
                 hops = getattr(m.lxm, "hops", 0) if m.lxm else 0
                 state = map_lxmf_state_to_ui(raw_state, is_outgoing)
+                image_info = self._find_image_for_message(m, msg_hash)
 
                 out.append({
                     "message_hash": msg_hash,
@@ -523,14 +745,17 @@ class ReticulumService:
                     "title": title,
                     "timestamp": ts,
                     "state": state,
-                    "hops": hops
+                    "hops": hops,
+                    "image_path": image_info["path"] if image_info else None,
+                    "image_name": image_info["name"] if image_info else None,
+                    "image_size": image_info["size"] if image_info else None,
                 })
             except Exception as e:
                 RNS.log(f"Retchat: Error loading message: {e}", RNS.LOG_ERROR)
 
         return out
 
-    def send_message(self, dest_hex: str, content: str) -> Dict[str, Any]:
+    def send_message(self, dest_hex: str, content: str, image_path: Optional[str] = None) -> Dict[str, Any]:
         dest_hex = dest_hex.strip().lower()
         if len(dest_hex) != 32:
             raise ValueError("Ungültige Zieladresse: Muss ein 32-Zeichen Hex-Hash sein.")
@@ -539,8 +764,16 @@ class ReticulumService:
         now = time.time()
         temp_hash = f"out_{int(now*1000)}"
 
+        # Prepare image field if image_path is provided
+        fields = None
+        img_info = None
+        if image_path and os.path.isfile(image_path):
+            img_bytes, fmt, img_info = self._prepare_outgoing_image(image_path)
+            if img_bytes:
+                fields = {LXMF.FIELD_IMAGE: [fmt, img_bytes]}
+
         if not self.peer_known(dest_hex):
-            self._pending.setdefault(dest_hex, []).append(content)
+            self._pending.setdefault(dest_hex, []).append((content, image_path))
             Conversation.query_for_peer(dest_hex)
             return {
                 "message_hash": temp_hash,
@@ -551,11 +784,14 @@ class ReticulumService:
                 "content": content,
                 "timestamp": now,
                 "state": STATE_SENDING,
-                "hops": 0
+                "hops": 0,
+                "image_path": img_info["path"] if img_info else image_path,
+                "image_name": img_info["name"] if img_info else (os.path.basename(image_path) if image_path else None),
+                "image_size": img_info["size"] if img_info else None,
             }
 
         try:
-            conv.send(content=content)
+            conv.send(content=content, fields=fields)
         except Exception as e:
             RNS.log(f"Retchat: Error sending message to {dest_hex}: {e}", RNS.LOG_ERROR)
             raise
@@ -601,7 +837,10 @@ class ReticulumService:
             "content": content,
             "timestamp": now,
             "state": STATE_SENDING,
-            "hops": hops
+            "hops": hops,
+            "image_path": img_info["path"] if img_info else image_path,
+            "image_name": img_info["name"] if img_info else (os.path.basename(image_path) if image_path else None),
+            "image_size": img_info["size"] if img_info else None,
         }
 
     def peer_known(self, dest_hex: str) -> bool:
@@ -619,9 +858,13 @@ class ReticulumService:
                 Conversation.query_for_peer(dest_hex)
                 continue
             queued = self._pending.pop(dest_hex)
-            for content in queued:
+            for item in queued:
                 try:
-                    self.send_message(dest_hex, content)
+                    if isinstance(item, tuple):
+                        content, img_p = item
+                        self.send_message(dest_hex, content, image_path=img_p)
+                    else:
+                        self.send_message(dest_hex, item)
                 except Exception as e:
                     RNS.log(f"Retchat: Failed to send pending message: {e}", RNS.LOG_ERROR)
             sent.append(dest_hex)
@@ -749,7 +992,9 @@ class ReticulumService:
             if hops == RNS.Transport.PATHFINDER_M:
                 hops = 0
 
-            self._trigger_notification(source_hash, content)
+            image_info = self._extract_image_from_lxmessage(message)
+
+            self._trigger_notification(source_hash, content, has_image=bool(image_info))
 
             msg_dict = {
                 "message_hash": msg_hash,
@@ -760,7 +1005,10 @@ class ReticulumService:
                 "content": content,
                 "timestamp": message.timestamp or time.time(),
                 "state": STATE_DELIVERED,
-                "hops": hops
+                "hops": hops,
+                "image_path": image_info["path"] if image_info else None,
+                "image_name": image_info["name"] if image_info else None,
+                "image_size": image_info["size"] if image_info else None,
             }
 
             GLib.idle_add(self._notify_message_received, msg_dict)
@@ -768,11 +1016,14 @@ class ReticulumService:
         except Exception as e:
             RNS.log(f"Retchat: Error handling inbound message: {e}", RNS.LOG_ERROR)
 
-    def _trigger_notification(self, sender_hex: str, content: str):
+    def _trigger_notification(self, sender_hex: str, content: str, has_image: bool = False):
         try:
             custom_name = self.db.get_custom_name(sender_hex)
             sender_name = custom_name or sender_hex[:8]
-            preview = (content[:60] + "...") if len(content) > 60 else content
+            if has_image:
+                preview = f"📷 Bild: {content}".strip() if content else "📷 Bild empfangen"
+            else:
+                preview = (content[:60] + "...") if len(content) > 60 else content
             subprocess.Popen([
                 "notify-send",
                 "-a", "Retchat",

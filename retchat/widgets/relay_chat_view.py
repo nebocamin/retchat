@@ -41,6 +41,11 @@ class RelayChatView(Adw.Bin):
         on_channel_selected: Optional[Callable[[str, str], None]] = None
     ):
         super().__init__()
+        self.set_vexpand(True)
+        self.set_hexpand(True)
+
+        self.toolbar_view = Adw.ToolbarView()
+        self.set_child(self.toolbar_view)
 
         self.on_send_message = on_send_message
         self.on_part_room = on_part_room
@@ -53,9 +58,6 @@ class RelayChatView(Adw.Bin):
         self.current_room: Optional[str] = None
         self.current_hub_name: str = ""
         self._displayed_keys: set = set()
-
-        self.toolbar_view = Adw.ToolbarView()
-        self.set_child(self.toolbar_view)
 
         # 1. Header Bar (Top Bar)
         self.header_bar = Adw.HeaderBar()
@@ -97,12 +99,13 @@ class RelayChatView(Adw.Bin):
         self.view_stack = Gtk.Stack()
         self.view_stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
         self.view_stack.set_vexpand(True)
+        self.view_stack.set_hexpand(True)
 
         # --- View 1: Room Chat (ToolbarView with ScrolledWindow and Bottom Bar) ---
         room_toolbar = Adw.ToolbarView()
+        room_toolbar.set_bottom_bar_style(Adw.ToolbarStyle.FLAT)
 
-        self.scrolled_window = Gtk.ScrolledWindow(vexpand=True)
-        self.scrolled_window.set_hexpand(True)
+        self.scrolled_window = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
         self.scrolled_window.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
 
         self.messages_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
@@ -114,6 +117,7 @@ class RelayChatView(Adw.Bin):
         clamp = Adw.Clamp(maximum_size=700, child=self.messages_box)
         self.scrolled_window.set_child(clamp)
         self._is_at_bottom = True
+        self._force_scroll_to_bottom = True
         vadj = self.scrolled_window.get_vadjustment()
         if vadj:
             vadj.connect("value-changed", self._on_scroll_value_changed)
@@ -150,11 +154,15 @@ class RelayChatView(Adw.Bin):
         self.bottom_bar.append(clamp_composer)
         room_toolbar.add_bottom_bar(self.bottom_bar)
 
+        room_toolbar.connect(
+            "notify::bottom-bar-height",
+            lambda _tv, _pspec: self._sync_bottom_margin()
+        )
+
         self.view_stack.add_named(room_toolbar, "room_chat")
-        self.toolbar_view.set_content(self.view_stack)
 
         # --- View 2: Hub Overview ---
-        self.hub_overview_scroll = Gtk.ScrolledWindow()
+        self.hub_overview_scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
         self.hub_overview_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
         self.hub_overview_scroll.set_vexpand(True)
 
@@ -205,6 +213,7 @@ class RelayChatView(Adw.Bin):
 
         self.hub_overview_scroll.set_child(self.hub_overview_box)
         self.view_stack.add_named(self.hub_overview_scroll, "hub_overview")
+        self.toolbar_view.set_content(self.view_stack)
 
     def _build_menu(self):
         menu_model = Gio.Menu()
@@ -351,6 +360,11 @@ class RelayChatView(Adw.Bin):
 
             self.members_list_box.append(row_box)
 
+    def _sync_bottom_margin(self):
+        inner_tv = self.scrolled_window.get_parent()
+        composer_h = inner_tv.get_bottom_bar_height() if hasattr(inner_tv, "get_bottom_bar_height") else 0
+        self.messages_box.set_margin_bottom(18 + composer_h)
+
     def add_message(self, msg_data: Dict[str, Any], scroll_to_bottom: bool = True):
         kind = msg_data.get("kind", "msg")
         text = msg_data.get("text", "")
@@ -466,26 +480,31 @@ class RelayChatView(Adw.Bin):
         self._is_at_bottom = True
         adj = self.scrolled_window.get_vadjustment()
         if adj:
-            adj.set_value(adj.get_upper())
+            max_v = max(0.0, adj.get_upper() - adj.get_page_size())
+            adj.set_value(max_v)
         return False
 
     def _scroll_after_layout(self):
         self._is_at_bottom = True
-        GLib.idle_add(self._scroll_to_bottom)
+        self._force_scroll_to_bottom = True
+        GLib.idle_add(self._scroll_to_bottom, priority=GLib.PRIORITY_LOW)
 
     scroll_to_bottom = _scroll_after_layout
 
     def _on_scroll_value_changed(self, adj):
+        if getattr(self, "_force_scroll_to_bottom", False):
+            return
         max_val = adj.get_upper() - adj.get_page_size()
         if max_val <= 0:
             self._is_at_bottom = True
         else:
             diff = max_val - adj.get_value()
-            self._is_at_bottom = (diff <= 60.0)
+            self._is_at_bottom = (diff <= 100.0)
 
     def _on_bounds_changed(self, adj, _pspec):
-        if getattr(self, "_is_at_bottom", True):
-            adj.set_value(adj.get_upper())
+        if getattr(self, "_is_at_bottom", True) or getattr(self, "_force_scroll_to_bottom", False):
+            self._scroll_to_bottom()
+            self._force_scroll_to_bottom = False
 
     def _on_entry_focus(self, entry, _pspec):
         if entry.has_focus():
