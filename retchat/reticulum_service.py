@@ -1093,20 +1093,7 @@ class ReticulumService:
                 RNS.log(f"Retchat: Error in conversations changed callback: {e}", RNS.LOG_ERROR)
         return False
 
-    # --- Sync & Interfaces ---
-    def request_sync(self, limit=None):
-        try:
-            self.app.request_lxmf_sync(limit=limit)
-            RNS.log("Retchat: LXMF propagation sync requested", RNS.LOG_INFO)
-        except Exception as e:
-            RNS.log(f"Retchat: Sync failed: {e}", RNS.LOG_ERROR)
-
-    def get_sync_status(self):
-        try:
-            return self.app.get_sync_status(), self.app.get_sync_progress()
-        except Exception:
-            return "unbekannt", None
-
+    # --- Interfaces ---
     def get_configured_interfaces(self) -> List[Dict[str, Any]]:
         """Read all configured interfaces from ~/.reticulum/config, cross-referenced with live status."""
         cfg_dir = os.path.expanduser("~/.reticulum")
@@ -1287,23 +1274,12 @@ class ReticulumService:
         except Exception as e:
             return False, f"Fehler beim Speichern: {e}"
 
-    def request_sync(self, target_node: Optional[str] = None) -> Tuple[bool, str]:
-        """Request LXMF message sync with default or specified propagation node."""
+    def request_sync(self) -> Tuple[bool, str]:
+        """Fetch all messages waiting for us on the (default or auto-selected) propagation node."""
         if not self.app:
             return False, "NomadNet-Backend nicht bereit"
 
         try:
-            if target_node:
-                try:
-                    target_bytes = bytes.fromhex(target_node)
-                    # Check if target is a known node with propagation capability
-                    for node in self.app.directory.known_nodes():
-                        if getattr(node, "source_hash", None) == target_bytes:
-                            self.app.message_router.set_outbound_propagation_node(target_bytes)
-                            break
-                except Exception:
-                    pass
-
             if not self.app.get_default_propagation_node():
                 self.app.autoselect_propagation_node()
 
