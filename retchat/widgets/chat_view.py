@@ -57,7 +57,6 @@ class ChatView(Adw.Bin):
         header.set_title_widget(self.window_title)
 
         menu = Gio.Menu()
-        menu.append("Sync", "win.sync")
         menu.append("Pfad im Mesh anfragen", "win.request_path")
         menu.append("Kontakt umbenennen", "win.rename")
         menu.append("Ziel-Hash kopieren", "win.copy_hash")
@@ -178,7 +177,7 @@ class ChatView(Adw.Bin):
 
         item = MessageItem(msg_data)
         self._items[item.message_hash] = item
-        self.history.append(item, scroll=item.is_outgoing)
+        self.history.append(item)
 
     def update_message_state(self, message_hash: str, state: int):
         item = self._items.get(message_hash)
@@ -202,6 +201,8 @@ class ChatView(Adw.Bin):
             return
         self.entry.set_text("")
         self._clear_pending_image()
+        # Jump to the end and stick there, so the own message is followed.
+        self.history.scroll_to_bottom()
         self._on_send_message(self.current_dest_hash, text, image_path)
 
     def _set_pending_image(self, file_path: str):

@@ -277,7 +277,7 @@ class RelayChatView(Adw.Bin):
         if item.dedup_key in self._displayed_keys:
             return
         self._displayed_keys.add(item.dedup_key)
-        self.history.append(item, scroll=item.is_me)
+        self.history.append(item)
 
     # --- Internals ------------------------------------------------------------
 

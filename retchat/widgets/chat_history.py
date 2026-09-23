@@ -92,10 +92,13 @@ class ChatHistory(Adw.Bin):
         self.store.splice(0, self.store.get_n_items(), list(items))
         self.scroll_to_bottom()
 
-    def append(self, item: GObject.Object, scroll: bool = False):
-        """Append an item. Follows it if the view is at the bottom or ``scroll`` is set."""
+    def append(self, item: GObject.Object):
+        """Append an item; the view follows it only while at the bottom.
+
+        To follow an own, just sent message, call scroll_to_bottom() before.
+        """
         self.store.append(item)
-        if scroll or self._stick_to_bottom:
+        if self._stick_to_bottom:
             self.scroll_to_bottom()
 
     def scroll_to_bottom(self):

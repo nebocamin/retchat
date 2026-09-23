@@ -127,7 +127,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         # Action: Sync (win.sync)
         self.action_sync = Gio.SimpleAction.new("sync", None)
         self.action_sync.connect("activate", lambda _a, _p: self._action_sync())
-        self.action_sync.set_enabled(False)
         self.add_action(self.action_sync)
 
         # Action: Interfaces dialog (win.interfaces)
@@ -196,8 +195,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         # Primary menu
         primary_menu = Gio.Menu()
         network_section = Gio.Menu()
-        network_section.append("Schnittstellen & Netzwerk", "win.interfaces")
+        network_section.append("Nachrichten synchronisieren", "win.sync")
         network_section.append("Im Mesh ankündigen", "win.announce")
+        network_section.append("Schnittstellen & Netzwerk", "win.interfaces")
         primary_menu.append_section(None, network_section)
         app_section = Gio.Menu()
         app_section.append("Über Retchat", "app.about")
@@ -451,7 +451,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_copy.set_enabled(True)
         self.action_rename.set_enabled(True)
         self.action_path.set_enabled(True)
-        self.action_sync.set_enabled(True)
 
         self.action_relay_reconnect.set_enabled(False)
         self.action_relay_copy.set_enabled(False)
@@ -605,7 +604,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_copy.set_enabled(False)
         self.action_rename.set_enabled(False)
         self.action_path.set_enabled(False)
-        self.action_sync.set_enabled(False)
 
         self.action_relay_reconnect.set_enabled(True)
         self.action_relay_copy.set_enabled(True)
@@ -657,7 +655,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_copy.set_enabled(False)
         self.action_rename.set_enabled(False)
         self.action_path.set_enabled(False)
-        self.action_sync.set_enabled(False)
 
         self.action_relay_reconnect.set_enabled(True)
         self.action_relay_copy.set_enabled(True)
@@ -1103,21 +1100,33 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.request_path(dest_hex, callback=on_path_result)
 
     def _action_sync(self):
-        if not self.current_dest_hash:
-            return
-        dest_hex = self.current_dest_hash
-        success, msg = self.service.request_sync(target_node=dest_hex)
+        """Fetch all messages waiting for us on the propagation node (not per chat)."""
+        success, msg = self.service.request_sync()
         self._show_toast(msg)
         if not success:
             return
+
+        # Only one sync at a time; re-enabled when finished or timed out.
+        self.action_sync.set_enabled(False)
 
         # Poll sync status periodically until finished
         start_time = time.time()
         last_status = [msg]
 
+        def _finish():
+            self.action_sync.set_enabled(True)
+            self._load_conversations()
+            if self.current_dest_hash:
+                # Append new messages (existing ones only get their state
+                # updated), so scroll position and draft are kept.
+                for m in self.service.get_messages(self.current_dest_hash):
+                    self.chat_view.append_message(m)
+            return False
+
         def _check_sync_progress():
             if time.time() - start_time > 45:
-                return False
+                self._show_toast("Synchronisierung: Zeitüberschreitung")
+                return _finish()
 
             status_raw = self.service.app.get_sync_status() if self.service and self.service.app else "Idle"
             status_text = self.service.get_sync_status_text()
@@ -1137,13 +1146,7 @@ class RetchatWindow(Adw.ApplicationWindow):
                 "Remote got no identity",
             )
             if status_raw in finished_states or (status_raw and status_raw.startswith("Downloaded ")):
-                self._load_conversations()
-                if self.current_dest_hash:
-                    conv = self.service.get_conversation(self.current_dest_hash)
-                    messages = self.service.get_messages(self.current_dest_hash)
-                    if conv:
-                        self.chat_view.load_conversation(conv, messages)
-                return False
+                return _finish()
 
             return True
 
