@@ -1,133 +1,156 @@
 <p align="center">
-  <img src="data/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg" width="128" height="128" alt="Retchat-Icon">
+  <img src="data/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg" width="128" height="128" alt="Retchat icon">
 </p>
 
 # Retchat
 
-**Retchat** ist ein moderner Desktop- und Mobile-Chat-Client für das [Reticulum Network](https://reticulum.network/) im **GTK4 + Libadwaita**-Stil (inspiriert von der Android-App [Columba](https://github.com/torlando-tech/columba)).
+**Retchat** is a desktop and mobile chat client for the [Reticulum Network](https://reticulum.network/), built with **GTK4 and Libadwaita** and inspired by the Android app [Columba](https://github.com/torlando-tech/columba).
 
-Mit Retchat kannst du dezentral, serverlos und Ende-zu-Ende-verschlüsselt über das Reticulum-Mesh-Netzwerk per [LXMF](https://github.com/markqvist/LXMF) (Lightweight Extensible Message Format) chatten – über WLAN, TCP-Verbindungen, LoRa-Funk (RNode) und lokale Interfaces.
+Chat without servers and end-to-end encrypted over the Reticulum mesh using [LXMF](https://github.com/markqvist/LXMF), over Wi-Fi, TCP, LoRa radio (RNode) and local interfaces. Retchat runs on the desktop as well as on Linux phones such as the PinePhone or Librem 5 with postmarketOS and Phosh.
 
----
-
-## Highlights & Features
-
-- 📱 **Phosh & PostmarketOS Mobile-optimiert**:
-  - Dank `Adw.Breakpoint` passt sich die App automatisch an schmale Bildschirme (360x720px PinePhone, Librem 5 usw.) an.
-  - Das Fenster lässt sich flexibel bis auf 300px Breite verkleinern.
-  - Auf Telefonen klappt die Ansicht in eine intuitive Einzelansicht (Seitenleiste ↔ Chat) mit automatischem Zurück-Button um.
-- 🎨 **Modernes GNOME / Libadwaita HIG Design**:
-  - Responsives `Adw.OverlaySplitView` mit Wischgesten und proportionaler Skalierung (inspiriert von Parla).
-  - Sprechblasen mit nativer Light- und Dark-Theme-Anpassung.
-  - Avatare mit Initialen, Zeitstempeln und Hop-Zählern.
-- 📬 **LXMF-Nachrichtenversand & Empfangsbestätigungen**:
-  - Live-Zustellungsstatus (`🕒 Wird gesendet` ➔ `✓ Gesendet` ➔ `✓✓ Zugestellt` ➔ `❌ Fehlgeschlagen`).
-  - Schneller Nachrichtenversand per Enter-Taste.
-- 📡 **Mesh-Entdeckung & Announce-Listener**:
-  - Eigener Tab **"Entdecken"**: Hört kontinuierlich auf `lxmf.delivery`-Ankündigungen im Reticulum-Netzwerk.
-  - Gefundene Peers werden mit Anzeigename, Zieladresse, Empfangs-Interface und Hop-Count aufgelistet.
-  - Mit nur einem Klick auf den Chat-Button kann direkt eine Unterhaltung gestartet werden.
-- 👤 **Identitäts- & Profil-Verwaltung**:
-  - Eigener Anzeigename (wird bei Ankündigungen im Mesh mitgeteilt).
-  - Schnelles Kopieren der eigenen **LXMF-Zieladresse** (Destination Hash) und des **Identitäts-Hashes**.
-  - Manueller "Jetzt im Mesh ankündigen (Announce)"-Button.
-  - Sichere Schlüsselspeicherung in `~/.config/retchat/identity`.
-- 🔌 **Schnittstellen-Status**:
-  - Dialog zur Echtzeit-Übersicht aller aktiven Reticulum-Interfaces (TCP-Clients, AutoInterface, RNode-LoRa) samt Online-Status und Traffic-Statistiken (RX/TX Bytes).
-- 💾 **Robuste lokale Persistenz**:
-  - Lokale SQLite-Datenbank (`~/.local/share/retchat/retchat.db`) für Nachrichten, Kontakte und Mesh-Peers.
-  - Desktop-Benachrichtigungen bei eingehenden Nachrichten (`notify-send`).
+The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
 
 ---
 
-## Installation & Ausführung
+## Features
 
-### 1. Als Flatpak für postmarketOS / Phosh (aarch64 / ARM64)
+- **Direct messages over LXMF**
+  - Delivery status for sent messages: sending, sent (✓), delivered (✓✓), failed.
+  - Send and receive images, with a built-in image viewer.
+  - Rename contacts, copy their address, request a path through the mesh.
+  - Delete chats from the chat menu, or by right click / long press in the chat list.
+- **Relay chat (RRC)**
+  - Group chat in channels on Reticulum Relay Chat hubs.
+  - Hub overview with message of the day, joined channels and member list.
+  - `/me` actions and join/part notices.
+- **Discover peers on the mesh**
+  - The *Entdecken* (discover) tab lists `lxmf.delivery` announces with display name, address and hop count.
+  - Start a chat with a single click.
+- **Message sync**
+  - Fetch messages that were stored for you on an LXMF propagation node while you were offline (main menu → *Nachrichten synchronisieren*).
+- **Identity and interfaces**
+  - Set your display name, copy your LXMF address and identity hash, announce yourself on the mesh.
+  - Overview of all Reticulum interfaces (TCP, AutoInterface, RNode/LoRa) with status and traffic; configure the TCP hub and the propagation node.
+- **Made for phones and desktops**
+  - Adaptive layout via `Adw.Breakpoint`: on narrow screens (down to 360 px) sidebar and chat become separate pages with a back button.
+  - Native light and dark style, GNOME HIG compliant.
+  - The chat always keeps the newest message in view – also when the on-screen keyboard opens or several messages arrive at once.
+  - Desktop notifications for incoming messages.
 
-Das fertige Flatpak-Bundle **`retchat-aarch64.flatpak`** (4.6 MB) ist speziell für **aarch64**-Geräte (wie PinePhone, PinePhone Pro, Librem 5, etc.) gebaut:
+> The user interface is currently in German.
 
-1. Bundle auf das Telefon kopieren:
-   ```bash
-   scp retchat-aarch64.flatpak user@telefon:~/
-   ```
-2. Auf dem Telefon installieren:
-   ```bash
-   flatpak install --user ~/retchat-aarch64.flatpak
-   ```
+---
 
-### 2. Als Flatpak für x86_64 (Desktop-PCs)
+## Installation
+
+Prebuilt Flatpak bundles are created with the build script (see below).
+
+### Linux phone (aarch64, e.g. postmarketOS with Phosh)
+
+```bash
+scp retchat-aarch64.flatpak user@phone:~/
+# on the phone:
+flatpak install --user ~/retchat-aarch64.flatpak
+```
+
+### Desktop (x86_64)
 
 ```bash
 flatpak install --user retchat.flatpak
 ```
 
-### 3. Flatpak neu bauen
+Both bundles use the runtime `org.gnome.Platform//50`, which Flatpak installs from Flathub if needed.
+
+To update, install the new bundle into the **same** installation (`--user` or `--system`) as before, otherwise two installations exist side by side and the older one may keep being started.
+
+### Run from source
+
+Requires Python 3, GTK 4.12+, Libadwaita 1.5+ and PyGObject, plus the Python packages from `setup.py` (`rns`, `lxmf`, `nomadnet`, …):
+
 ```bash
-# Für aarch64 (postmarketOS Telefon):
-./build-flatpak.sh --aarch64
-
-# Für x86_64 (Desktop PC):
-./build-flatpak.sh
-
-# Für beide Architekturen:
-./build-flatpak.sh --all
-```
-
-### 4. Direkt über das lokale Startskript
-```bash
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -e .
 ./retchat.sh
 ```
 
 ---
 
-## Projektstruktur
+## Building the Flatpaks
+
+```bash
+./build-flatpak.sh            # x86_64 (flatpak-builder)
+./build-flatpak.sh --aarch64  # aarch64, without QEMU/binfmt
+./build-flatpak.sh --all      # both
+```
+
+The aarch64 bundle is cross-packaged by `build_aarch64_bundle.py`: it downloads prebuilt aarch64 wheels from PyPI and assembles the Flatpak without emulation.
+
+---
+
+## Where data is stored
+
+Retchat uses [NomadNet](https://github.com/markqvist/NomadNet) as its LXMF backend. On the same machine, Retchat and NomadNet therefore **share identity, contacts and messages**.
+
+| Path | Content |
+|---|---|
+| `~/.nomadnetwork/storage/identity` | Your Reticulum identity (private key) |
+| `~/.nomadnetwork/storage/conversations/` | Messages |
+| `~/.nomadnetwork/storage/attachments/` | Received images and files |
+| `~/.nomadnetwork/config` | NomadNet settings, e.g. announce interval (default: at start and every 6 hours) |
+| `~/.reticulum/config` | Reticulum interfaces; on first start Retchat makes sure a TCP interface is configured |
+| `~/.local/share/retchat/retchat.db` | Retchat's own data: custom contact names and settings |
+
+---
+
+## Project structure
 
 ```text
 retchat/
-├── org.selfmade.Retchat.json         # Flatpak-Manifest
-├── build-flatpak.sh                  # Universelles Flatpak-Build-Skript
-├── build_aarch64_bundle.py           # aarch64 Cross-Packager (ohne QEMU/binfmt)
-├── retchat-aarch64.flatpak           # Fertiges ARM64 Flatpak-Bundle (4.6 MB)
-├── retchat.flatpak                   # Fertiges x86_64 Flatpak-Bundle (5.1 MB)
-├── org.selfmade.Retchat.metainfo.xml # AppStream Metadaten
-├── org.selfmade.Retchat.desktop  # Desktop-Starter mit FormFactor-Unterstützung
-├── setup.py                      # Python Package Definition
-├── main.py                       # Haupteinstiegspunkt
-├── retchat.sh                    # Lokales Ausführskript
+├── org.selfmade.Retchat.json          # Flatpak manifest (x86_64)
+├── build-flatpak.sh                   # Flatpak build script
+├── build_aarch64_bundle.py            # aarch64 cross-packager
+├── org.selfmade.Retchat.metainfo.xml  # AppStream metadata
+├── org.selfmade.Retchat.desktop       # Desktop entry (desktop and mobile form factor)
+├── setup.py                           # Python package definition
+├── main.py / retchat.sh               # Entry point / local launcher
 ├── data/icons/
-│   ├── generate_icon.py          # Erzeugt das App-Icon (Sperrrad-Sprechblase, „Ratchet“)
-│   └── hicolor/                  # App-Icon (scalable) und symbolisches Icon
-├── retchat/
-│   ├── app.py                    # Adw.Application: Lebenszyklus, CSS, Icons, Über-Dialog
-│   ├── window.py                 # Hauptfenster (OverlaySplitView, Breakpoints)
-│   ├── models.py                 # GObject-Modelle für Nachrichten (MessageItem, RelayMessageItem)
-│   ├── database.py               # SQLite-Speicher (Unterhaltungen, Nachrichten, Announces)
-│   ├── reticulum_service.py      # Reticulum & LXMF-Service, Dispatcher & Callbacks
-│   ├── style.css                 # Libadwaita-CSS (Chat-Bubbles, Badges, Composer)
-│   ├── widgets/
-│   │   ├── chat_history.py       # Gtk.ListView-Verlauf, hält die neueste Nachricht im Blick
-│   │   ├── chat_view.py          # Direkt-Chat: Verlauf & Eingabeleiste
-│   │   ├── message_bubble.py     # Sprechblase mit Bild & Zustellstatus
-│   │   ├── relay_chat_view.py    # Relay-Chat: Räume & Hub-Übersicht
-│   │   ├── relay_message_row.py  # Relay-Nachricht, /me-Aktion oder Hinweis
-│   │   ├── conversation_row.py   # Zeile in der Unterhaltungsliste
-│   │   ├── announce_row.py       # Zeile in der Mesh-Entdeckungsliste
-│   │   └── relay_room_row.py     # Hub- und Kanalzeilen in der Relay-Liste
-│   └── dialogs/
-│       ├── new_chat_dialog.py    # Neuer Chat (Hash-Eingabe mit Validierung)
-│       ├── profile_dialog.py     # Eigenes Profil & Announce
-│       ├── interfaces_dialog.py  # Reticulum Interface-Status
-│       ├── add_relay_dialog.py   # Relay-Hub hinzufügen
-│       ├── join_channel_dialog.py # Relay-Kanal beitreten
-│       └── image_viewer_dialog.py # Bildbetrachter
+│   ├── generate_icon.py               # Generates the app icon (ratchet-wheel speech bubble)
+│   └── hicolor/                       # Scalable and symbolic app icon
+└── retchat/
+    ├── app.py                         # Adw.Application: lifecycle, CSS, icons, about dialog
+    ├── window.py                      # Main window (split view, breakpoints, menus, actions)
+    ├── models.py                      # GObject models for messages (MessageItem, RelayMessageItem)
+    ├── database.py                    # SQLite store for custom names and settings
+    ├── reticulum_service.py           # Reticulum / LXMF / NomadNet service and callbacks
+    ├── style.css                      # Libadwaita CSS (bubbles, badges, composer)
+    ├── widgets/
+    │   ├── chat_history.py            # Gtk.ListView history that keeps the newest message in view
+    │   ├── chat_view.py               # Direct chat: history and composer
+    │   ├── message_bubble.py          # Message bubble with image and delivery status
+    │   ├── relay_chat_view.py         # Relay chat: rooms and hub overview
+    │   ├── relay_message_row.py       # Relay message, /me action or notice
+    │   ├── conversation_row.py        # Row in the chat list
+    │   ├── announce_row.py            # Row in the discover list
+    │   └── relay_room_row.py          # Hub and channel rows in the relay list
+    └── dialogs/
+        ├── new_chat_dialog.py         # New chat (address input with validation)
+        ├── profile_dialog.py          # Own profile and announce
+        ├── interfaces_dialog.py       # Reticulum interfaces, TCP hub, propagation node
+        ├── add_relay_dialog.py        # Add a relay hub
+        ├── join_channel_dialog.py     # Join a relay channel
+        └── image_viewer_dialog.py     # Image viewer
 ```
 
 ---
 
-## Getestet mit
-- Phosh Mobile Breakpoint (bis 300px Fensterbreite verkleinerbar)
-- Flatpak Runtime `org.gnome.Platform//50`
-- Kontakt `8d883cfe6c1a846d8f34e5a95a149fdb`
-- Reticulum 1.5.4
-- LXMF 1.1.1
-- GTK 4.0 / Libadwaita 1.9
+## Tested with
+
+- Flatpak runtime `org.gnome.Platform//50` (GTK 4, Libadwaita 1.9)
+- Reticulum 1.5.4, LXMF 1.1.1, NomadNet 1.4.3
+- Phosh / narrow windows down to 360 px width
+
+---
+
+## License
+
+GPL-3.0-or-later, see [LICENSE](LICENSE).

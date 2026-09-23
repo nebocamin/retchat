@@ -7,6 +7,18 @@ APP_ID = "org.selfmade.Retchat"
 COLOR_OUT = os.path.join(HERE, "hicolor", "scalable", "apps", f"{APP_ID}.svg")
 SYMBOLIC_OUT = os.path.join(HERE, "hicolor", "symbolic", "apps", f"{APP_ID}-symbolic.svg")
 
+# Colours of the full-colour icon. The face gradient runs diagonally from
+# top left to bottom right (lilac to coral pink, as in the Columba icon).
+PALETTE = {
+    "face_start": "#c471ed",   # toothed rim, top left
+    "face_end": "#f64f59",     # toothed rim, bottom right
+    "depth": "#a2356f",        # bottom edge (GNOME style depth)
+    "shadow": "#a2356f",       # shadow of the inner bubble face
+    "dots": "#d6589f",         # mesh / typing dots
+    "paper_start": "#ffffff",  # inner bubble face
+    "paper_end": "#deddda",
+}
+
 
 def ratchet_bubble_path(cx, cy, r_tip, r_root, teeth, tail_tip, tail_a0, tail_a1, prec=2, rot=-90.0):
     """Outline of a sawtooth ratchet wheel merged with a speech bubble tail.
@@ -63,32 +75,33 @@ FACE_R = 35
 dots = [(45, 58), (64, 58), (83, 58)]
 dot_r = 6.5
 
-color_svg = f"""<?xml version="1.0" encoding="UTF-8"?>
+def build_color_svg(c: dict) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <title>Retchat</title>
   <defs>
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#62a0ea"/>
-      <stop offset="1" stop-color="#3584e4"/>
+    <linearGradient id="face" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="{c['face_start']}"/>
+      <stop offset="1" stop-color="{c['face_end']}"/>
     </linearGradient>
     <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#deddda"/>
+      <stop offset="0" stop-color="{c['paper_start']}"/>
+      <stop offset="1" stop-color="{c['paper_end']}"/>
     </linearGradient>
   </defs>
   <!-- side / depth (GNOME style bottom edge) -->
-  <g transform="translate(0 6)" fill="#1a5fb4" stroke="#1a5fb4" stroke-width="2" stroke-linejoin="round">
+  <g transform="translate(0 6)" fill="{c['depth']}" stroke="{c['depth']}" stroke-width="2" stroke-linejoin="round">
     <circle cx="{CX}" cy="{CY}" r="{R_TIP - 3}"/>
     <path d="{tail_side}"/>
   </g>
   <!-- ratchet wheel speech bubble -->
   <path d="{shape}" fill="url(#face)" stroke="url(#face)" stroke-width="2" stroke-linejoin="round"/>
   <!-- bubble face inside the toothed rim -->
-  <circle cx="{CX}" cy="{CY + 2.5}" r="{FACE_R}" fill="#1a5fb4" fill-opacity="0.45"/>
+  <circle cx="{CX}" cy="{CY + 2.5}" r="{FACE_R}" fill="{c['shadow']}" fill-opacity="0.45"/>
   <circle cx="{CX}" cy="{CY}" r="{FACE_R}" fill="url(#paper)"/>
   <!-- mesh / typing dots -->
-  <path d="M {dots[0][0]},{dots[0][1]} L {dots[2][0]},{dots[2][1]}" stroke="#3584e4" stroke-width="5" stroke-linecap="round"/>
-  <g fill="#3584e4">
+  <path d="M {dots[0][0]},{dots[0][1]} L {dots[2][0]},{dots[2][1]}" stroke="{c['dots']}" stroke-width="5" stroke-linecap="round"/>
+  <g fill="{c['dots']}">
 {chr(10).join(f'    <circle cx="{x}" cy="{y}" r="{dot_r}"/>' for x, y in dots)}
   </g>
 </svg>
@@ -113,6 +126,9 @@ symbolic_svg = f"""<?xml version="1.0" encoding="UTF-8"?>
 </svg>
 """
 
-open(COLOR_OUT, "w").write(color_svg)
-open(SYMBOLIC_OUT, "w").write(symbolic_svg)
-print("written", COLOR_OUT, SYMBOLIC_OUT)
+if __name__ == "__main__":
+    with open(COLOR_OUT, "w") as f:
+        f.write(build_color_svg(PALETTE))
+    with open(SYMBOLIC_OUT, "w") as f:
+        f.write(symbolic_svg)
+    print("written", COLOR_OUT, SYMBOLIC_OUT)
