@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.selfmade.Retchat</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Retchat</name>
+  <summary>Dezentraler Reticulum LXMF Chat für Desktop und Phosh-Mobilgeräte</summary>
+  <description>
+    <p>
+      Retchat ist ein moderner Chat-Client für das Reticulum Network im GTK4/Libadwaita-Stil,
+      optimiert für Desktop und mobile Linux-Geräte (z.B. postmarketOS mit Phosh).
+    </p>
+    <p>
+      Funktionen umfassen Ende-zu-Ende-Verschlüsselung per LXMF, Peer-Entdeckung im Mesh über
+      Announces, Schnittstellenübersicht (TCP, LoRa RNode) und konfigurierbare Identitäten.
+    </p>
+  </description>
+  <launchable type="desktop-id">org.selfmade.Retchat.desktop</launchable>
+  <provides>
+    <binary>retchat</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>Chat</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+</component>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=Retchat
+Comment=Modern Reticulum Network LXMF Chat Client
+Exec=retchat %U
+Icon=org.selfmade.Retchat
+Terminal=false
+Type=Application
+Categories=Network;Chat;InstantMessaging;GTK;
+StartupNotify=true
+StartupWMClass=org.selfmade.Retchat
+Keywords=Reticulum;RNS;LXMF;Mesh;Chat;Encrypted;Phosh;Mobile;
+X-Purism-FormFactor=Workstation;Mobile;

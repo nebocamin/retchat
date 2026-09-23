@@ -1,0 +1,44 @@
+{
+    "app-id": "org.selfmade.Retchat",
+    "runtime": "org.gnome.Platform",
+    "runtime-version": "50",
+    "sdk": "org.gnome.Sdk",
+    "command": "retchat",
+    "finish-args": [
+        "--share=network",
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--device=all",
+        "--filesystem=home",
+        "--talk-name=org.freedesktop.Notifications"
+    ],
+    "modules": [
+        {
+            "name": "python-dependencies",
+            "buildsystem": "simple",
+            "build-options": {
+                "build-args": ["--share=network"]
+            },
+            "build-commands": [
+                "pip3 install --prefix=/app rns lxmf msgpack cryptography pyserial nomadnet qrcode urwid wcwidth setuptools wheel pillow"
+            ]
+        },
+        {
+            "name": "retchat",
+            "buildsystem": "simple",
+            "sources": [
+                {
+                    "type": "dir",
+                    "path": "."
+                }
+            ],
+            "build-commands": [
+                "pip3 install --no-build-isolation --no-deps --prefix=/app .",
+                "install -Dm644 org.selfmade.Retchat.desktop /app/share/applications/org.selfmade.Retchat.desktop",
+                "install -Dm644 retchat.svg /app/share/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg",
+                "install -Dm644 org.selfmade.Retchat.metainfo.xml /app/share/metainfo/org.selfmade.Retchat.metainfo.xml"
+            ]
+        }
+    ]
+}
