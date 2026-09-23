@@ -130,6 +130,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.action_sync.set_enabled(False)
         self.add_action(self.action_sync)
 
+        # Action: Interfaces dialog (win.interfaces)
+        action_interfaces = Gio.SimpleAction.new("interfaces", None)
+        action_interfaces.connect("activate", lambda _a, _p: self._show_interfaces_dialog())
+        self.add_action(action_interfaces)
+
         # Action: Announce (win.announce)
         self.action_announce = Gio.SimpleAction.new("announce", None)
         self.action_announce.connect("activate", lambda _a, _p: self._action_announce_self())
@@ -188,11 +193,21 @@ class RetchatWindow(Adw.ApplicationWindow):
         title_widget = Adw.WindowTitle(title="Retchat", subtitle="Reticulum Mesh")
         header.set_title_widget(title_widget)
 
-        # Interfaces & Mesh status button
-        iface_btn = Gtk.Button(icon_name="network-wireless-symbolic")
-        iface_btn.set_tooltip_text("Schnittstellen, TCP-Hub & Propagation-Node")
-        iface_btn.connect("clicked", lambda _b: self._show_interfaces_dialog())
-        header.pack_end(iface_btn)
+        # Primary menu
+        primary_menu = Gio.Menu()
+        network_section = Gio.Menu()
+        network_section.append("Schnittstellen & Netzwerk", "win.interfaces")
+        network_section.append("Im Mesh ankündigen", "win.announce")
+        primary_menu.append_section(None, network_section)
+        app_section = Gio.Menu()
+        app_section.append("Über Retchat", "app.about")
+        primary_menu.append_section(None, app_section)
+        header.pack_end(Gtk.MenuButton(
+            icon_name="open-menu-symbolic",
+            tooltip_text="Hauptmenü",
+            menu_model=primary_menu,
+            primary=True,
+        ))
 
         # New chat button (+)
         self.add_btn = Gtk.Button(icon_name="list-add-symbolic")
@@ -319,7 +334,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         empty_box.append(empty_header)
 
         empty_page = Adw.StatusPage()
-        empty_page.set_icon_name("network-wireless-symbolic")
+        empty_page.set_icon_name("org.selfmade.Retchat")
         empty_page.set_title("Retchat")
         empty_page.set_description(
             "Wähle eine Unterhaltung aus oder starte einen neuen Chat über das Reticulum-Mesh-Netzwerk."

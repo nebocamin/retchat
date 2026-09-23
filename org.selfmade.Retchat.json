@@ -49,7 +49,8 @@
             "build-commands": [
                 "pip3 install --no-build-isolation --no-deps --prefix=/app .",
                 "install -Dm644 org.selfmade.Retchat.desktop /app/share/applications/org.selfmade.Retchat.desktop",
-                "install -Dm644 retchat.svg /app/share/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg",
+                "install -Dm644 data/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg /app/share/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg",
+                "install -Dm644 data/icons/hicolor/symbolic/apps/org.selfmade.Retchat-symbolic.svg /app/share/icons/hicolor/symbolic/apps/org.selfmade.Retchat-symbolic.svg",
                 "install -Dm644 org.selfmade.Retchat.metainfo.xml /app/share/metainfo/org.selfmade.Retchat.metainfo.xml"
             ]
         }

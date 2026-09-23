@@ -54,9 +54,10 @@ def main():
     site_packages = os.path.join(files_dir, "lib", "python3.13", "site-packages")
     apps_dir = os.path.join(files_dir, "share", "applications")
     icons_dir = os.path.join(files_dir, "share", "icons", "hicolor", "scalable", "apps")
+    symbolic_icons_dir = os.path.join(files_dir, "share", "icons", "hicolor", "symbolic", "apps")
     metainfo_dir = os.path.join(files_dir, "share", "metainfo")
 
-    for d in (bin_dir, site_packages, apps_dir, icons_dir, metainfo_dir):
+    for d in (bin_dir, site_packages, apps_dir, icons_dir, symbolic_icons_dir, metainfo_dir):
         os.makedirs(d, exist_ok=True)
 
     # Extract all aarch64 wheels
@@ -85,7 +86,9 @@ def main():
 
     # Desktop entry, icon, and metainfo
     shutil.copy(os.path.join(BASE_DIR, "org.selfmade.Retchat.desktop"), apps_dir)
-    shutil.copy(os.path.join(BASE_DIR, "retchat.svg"), os.path.join(icons_dir, "org.selfmade.Retchat.svg"))
+    icon_src = os.path.join(BASE_DIR, "data", "icons", "hicolor")
+    shutil.copy(os.path.join(icon_src, "scalable", "apps", "org.selfmade.Retchat.svg"), icons_dir)
+    shutil.copy(os.path.join(icon_src, "symbolic", "apps", "org.selfmade.Retchat-symbolic.svg"), symbolic_icons_dir)
     shutil.copy(os.path.join(BASE_DIR, "org.selfmade.Retchat.metainfo.xml"), metainfo_dir)
 
     # Finalize with flatpak build-finish

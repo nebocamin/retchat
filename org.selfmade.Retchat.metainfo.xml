@@ -4,6 +4,14 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Retchat</name>
+  <developer id="org.selfmade">
+    <name>stereo</name>
+  </developer>
+  <url type="homepage">https://github.com/nebocamin/retchat</url>
+  <url type="vcs-browser">https://github.com/nebocamin/retchat</url>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
   <summary>Dezentraler Reticulum LXMF Chat für Desktop und Phosh-Mobilgeräte</summary>
   <description>
     <p>
@@ -16,6 +24,11 @@
     </p>
   </description>
   <launchable type="desktop-id">org.selfmade.Retchat.desktop</launchable>
+  <icon type="stock">org.selfmade.Retchat</icon>
+  <branding>
+    <color type="primary" scheme_preference="light">#99c1f1</color>
+    <color type="primary" scheme_preference="dark">#1a5fb4</color>
+  </branding>
   <provides>
     <binary>retchat</binary>
   </provides>

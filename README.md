@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="data/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg" width="128" height="128" alt="Retchat-Icon">
+</p>
+
 # Retchat
 
 **Retchat** ist ein moderner Desktop- und Mobile-Chat-Client für das [Reticulum Network](https://reticulum.network/) im **GTK4 + Libadwaita**-Stil (inspiriert von der Android-App [Columba](https://github.com/torlando-tech/columba)).
@@ -90,22 +94,32 @@ retchat/
 ├── setup.py                      # Python Package Definition
 ├── main.py                       # Haupteinstiegspunkt
 ├── retchat.sh                    # Lokales Ausführskript
-├── retchat.svg                   # Anwendungs-Icon
+├── data/icons/
+│   ├── generate_icon.py          # Erzeugt das App-Icon (Sperrrad-Sprechblase, „Ratchet“)
+│   └── hicolor/                  # App-Icon (scalable) und symbolisches Icon
 ├── retchat/
-│   ├── app.py                    # Adw.Application Lebenszyklus & CSS-Lader
+│   ├── app.py                    # Adw.Application: Lebenszyklus, CSS, Icons, Über-Dialog
 │   ├── window.py                 # Hauptfenster (OverlaySplitView, Breakpoints)
+│   ├── models.py                 # GObject-Modelle für Nachrichten (MessageItem, RelayMessageItem)
 │   ├── database.py               # SQLite-Speicher (Unterhaltungen, Nachrichten, Announces)
 │   ├── reticulum_service.py      # Reticulum & LXMF-Service, Dispatcher & Callbacks
 │   ├── style.css                 # Libadwaita-CSS (Chat-Bubbles, Badges, Composer)
 │   ├── widgets/
-│   │   ├── chat_view.py          # Chat-Verlauf & Eingabeleiste
-│   │   ├── message_bubble.py     # Sprechblasen-Widget mit Status-Symbolen
+│   │   ├── chat_history.py       # Gtk.ListView-Verlauf, hält die neueste Nachricht im Blick
+│   │   ├── chat_view.py          # Direkt-Chat: Verlauf & Eingabeleiste
+│   │   ├── message_bubble.py     # Sprechblase mit Bild & Zustellstatus
+│   │   ├── relay_chat_view.py    # Relay-Chat: Räume & Hub-Übersicht
+│   │   ├── relay_message_row.py  # Relay-Nachricht, /me-Aktion oder Hinweis
 │   │   ├── conversation_row.py   # Zeile in der Unterhaltungsliste
-│   │   └── announce_row.py       # Zeile in der Mesh-Entdeckungsliste
+│   │   ├── announce_row.py       # Zeile in der Mesh-Entdeckungsliste
+│   │   └── relay_room_row.py     # Hub- und Kanalzeilen in der Relay-Liste
 │   └── dialogs/
 │       ├── new_chat_dialog.py    # Neuer Chat (Hash-Eingabe mit Validierung)
 │       ├── profile_dialog.py     # Eigenes Profil & Announce
-│       └── interfaces_dialog.py  # Reticulum Interface-Status
+│       ├── interfaces_dialog.py  # Reticulum Interface-Status
+│       ├── add_relay_dialog.py   # Relay-Hub hinzufügen
+│       ├── join_channel_dialog.py # Relay-Kanal beitreten
+│       └── image_viewer_dialog.py # Bildbetrachter
 ```
 
 ---

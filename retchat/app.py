@@ -12,11 +12,16 @@ from retchat.database import Database
 from retchat.reticulum_service import ReticulumService
 from retchat.window import RetchatWindow
 
+APP_ID = "org.selfmade.Retchat"
+VERSION = "0.1.0"
+# Icons of a source checkout; installed builds (Flatpak) use /app/share/icons.
+SOURCE_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "icons")
+
 
 class RetchatApp(Adw.Application):
     def __init__(self):
         super().__init__(
-            application_id="org.selfmade.Retchat",
+            application_id=APP_ID,
             flags=Gio.ApplicationFlags.FLAGS_NONE
         )
         self.db: Database = None  # type: ignore
@@ -28,6 +33,11 @@ class RetchatApp(Adw.Application):
 
         # Load custom CSS
         self._load_css()
+        self._setup_icons()
+
+        about_action = Gio.SimpleAction.new("about", None)
+        about_action.connect("activate", lambda _a, _p: self._show_about())
+        self.add_action(about_action)
 
         # Initialize Database and Reticulum Service
         self.db = Database()
@@ -45,6 +55,28 @@ class RetchatApp(Adw.Application):
                     provider,
                     Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
                 )
+
+    def _setup_icons(self):
+        display = Gdk.Display.get_default()
+        if display and os.path.isdir(SOURCE_ICON_DIR):
+            # Prepend, so the checkout's icon wins over an installed (older) copy.
+            theme = Gtk.IconTheme.get_for_display(display)
+            theme.set_search_path([SOURCE_ICON_DIR, *theme.get_search_path()])
+        Gtk.Window.set_default_icon_name(APP_ID)
+
+    def _show_about(self):
+        about = Adw.AboutDialog(
+            application_name="Retchat",
+            application_icon=APP_ID,
+            version=VERSION,
+            developer_name="stereo",
+            comments="Dezentraler, Ende-zu-Ende-verschlüsselter Chat über das Reticulum-Mesh-Netzwerk (LXMF und Relay Chat).",
+            website="https://github.com/nebocamin/retchat",
+            issue_url="https://github.com/nebocamin/retchat/issues",
+            license_type=Gtk.License.GPL_3_0,
+        )
+        about.add_link("Reticulum Network", "https://reticulum.network/")
+        about.present(self.get_active_window())
 
     def do_activate(self):
         if not self.window:

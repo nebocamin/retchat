@@ -2,7 +2,7 @@
 Name=Retchat
 Comment=Modern Reticulum Network LXMF Chat Client
 Exec=/home/stereo/selfmade/retchat/retchat.sh %U
-Icon=retchat
+Icon=org.selfmade.Retchat
 Terminal=false
 Type=Application
 Categories=Network;Chat;InstantMessaging;GTK;
