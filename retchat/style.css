@@ -1,52 +1,133 @@
 /* Custom Libadwaita styling for Retchat */
 
-.bubble-outgoing {
-    background-color: alpha(@accent_color, 0.18);
-    color: @window_fg_color;
-    border: 1px solid alpha(@accent_color, 0.28);
-    border-radius: 18px 18px 4px 18px;
-    padding: 9px 14px;
-    margin-left: 36px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+/* ---------------------------------------------------------------------------
+ * Chat history (ChatView: Gtk.ListView of MessageBubble rows)
+ * ------------------------------------------------------------------------- */
+
+listview.chat-history {
+    background: none;
+    padding: 12px 12px 18px 12px;
 }
 
-.bubble-outgoing .message-text {
-    color: @window_fg_color;
+listview.chat-history > row {
+    padding: 0;
+    background: none;
 }
 
-.bubble-outgoing .message-time {
-    color: alpha(@window_fg_color, 0.6);
-    font-size: 0.75rem;
+.message-row {
+    padding: 2px 0;
 }
 
-.bubble-outgoing .message-status {
+.message-bubble {
+    padding: 8px 12px 6px 12px;
+    border-radius: 18px;
+}
+
+/* Keep bubbles from spanning the full width, leaving room on the opposite side */
+.message-bubble.outgoing {
+    margin-left: 48px;
+    border-bottom-right-radius: 6px;
+    background-color: alpha(@accent_bg_color, 0.18);
+}
+
+.message-bubble.incoming {
+    margin-right: 48px;
+    border-bottom-left-radius: 6px;
+    background-color: @card_bg_color;
+    box-shadow: 0 0 0 1px @card_shade_color;
+}
+
+.message-bubble.has-image {
+    padding: 6px;
+}
+
+.message-bubble.has-image .message-text,
+.message-bubble.has-image .message-footer {
+    margin-left: 6px;
+    margin-right: 6px;
+}
+
+.message-image {
+    border-radius: 12px;
+}
+
+.image-error {
+    padding: 8px 0;
+    opacity: 0.6;
+    font-size: 0.85em;
+}
+
+.message-footer {
+    margin-top: -2px;
+}
+
+.message-time,
+.message-state {
+    font-size: 0.75em;
+    font-feature-settings: "tnum";
+    opacity: 0.6;
+}
+
+.message-state.delivered {
     color: @accent_color;
-    font-size: 0.8rem;
+    opacity: 1;
+}
+
+.message-state.error {
+    color: @error_color;
+    opacity: 1;
+}
+
+.scroll-down-button {
+    margin: 12px 18px;
+}
+
+/* Composer */
+.composer {
+    padding: 6px 12px;
+}
+
+.attachment-chip {
+    padding: 4px 4px 4px 6px;
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.08);
+}
+
+.attachment-thumb {
+    border-radius: 8px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Relay chat view (widgets/relay_chat_view.py)
+ * ------------------------------------------------------------------------- */
+
+.bubble-outgoing {
+    background-color: alpha(@accent_bg_color, 0.18);
+    border-radius: 18px 18px 6px 18px;
+    padding: 8px 12px;
+    margin-left: 48px;
 }
 
 .bubble-incoming {
     background-color: @card_bg_color;
-    color: @window_fg_color;
-    border: 1px solid alpha(currentColor, 0.08);
-    border-radius: 18px 18px 18px 4px;
-    padding: 9px 14px;
-    margin-right: 36px;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-}
-
-.bubble-incoming .message-text {
-    color: @window_fg_color;
-}
-
-.bubble-incoming .message-time {
-    color: alpha(@window_fg_color, 0.55);
-    font-size: 0.75rem;
+    box-shadow: 0 0 0 1px @card_shade_color;
+    border-radius: 18px 18px 18px 6px;
+    padding: 8px 12px;
+    margin-right: 48px;
 }
 
 .message-text {
-    font-size: 0.95rem;
     line-height: 1.35;
 }
+
+.chat-bottom-bar {
+    background-color: @card_bg_color;
+    border-top: 1px solid alpha(currentColor, 0.12);
+}
+
+/* ---------------------------------------------------------------------------
+ * Sidebar
+ * ------------------------------------------------------------------------- */
 
 .badge {
     border-radius: 10px;
@@ -65,11 +146,6 @@
     color: @accent_color;
 }
 
-.chat-bottom-bar {
-    background-color: @card_bg_color;
-    border-top: 1px solid alpha(currentColor, 0.12);
-}
-
 /* Compact segmented switcher for sidebar tabs (Chats / Entdecken / Relay) */
 .compact-switcher,
 stackswitcher {
@@ -79,10 +155,7 @@ stackswitcher {
 
 .compact-switcher button,
 stackswitcher button {
-    padding-left: 10px;
-    padding-right: 10px;
-    padding-top: 4px;
-    padding-bottom: 4px;
+    padding: 4px 10px;
     min-width: 0;
 }
 
@@ -90,45 +163,4 @@ stackswitcher button {
 stackswitcher button label {
     font-size: 0.88rem;
     font-weight: 500;
-}
-
-/* Image message bubble styling */
-.bubble-has-image {
-    padding: 6px;
-}
-
-.bubble-has-image .message-image-container {
-    border-radius: 14px;
-    overflow: hidden;
-}
-
-.bubble-has-image .message-image {
-    border-radius: 14px;
-}
-
-.bubble-has-image .message-text {
-    margin: 4px 6px 2px 6px;
-}
-
-.bubble-has-image .meta-box {
-    margin: 2px 6px 2px 6px;
-}
-
-.image-error-box {
-    padding: 12px;
-    color: alpha(@window_fg_color, 0.6);
-    font-size: 0.85rem;
-}
-
-/* Image attachment preview in message composer */
-.image-attachment-chip {
-    background-color: alpha(currentColor, 0.08);
-    border: 1px solid alpha(currentColor, 0.12);
-    border-radius: 12px;
-    padding: 6px 10px;
-    margin-bottom: 6px;
-}
-
-.image-attachment-thumb {
-    border-radius: 8px;
 }

@@ -30,7 +30,20 @@
             "sources": [
                 {
                     "type": "dir",
-                    "path": "."
+                    "path": ".",
+                    "skip": [
+                        ".git",
+                        ".venv",
+                        ".flatpak-builder",
+                        ".flatpak-build",
+                        ".flatpak-repo",
+                        ".flatpak-build-aarch64",
+                        ".flatpak-repo-aarch64",
+                        ".wheels-aarch64",
+                        ".pytest_cache",
+                        "retchat.flatpak",
+                        "retchat-aarch64.flatpak"
+                    ]
                 }
             ],
             "build-commands": [

@@ -339,9 +339,6 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.chat_view = ChatView(
             on_back_clicked=self._on_chat_back_clicked,
             on_send_message=self._on_send_message,
-            on_rename_contact=self._action_rename_contact,
-            on_copy_hash=self._action_copy_hash,
-            on_request_path=self._action_request_path
         )
         self.content_stack.add_named(self.chat_view, "chat")
 
