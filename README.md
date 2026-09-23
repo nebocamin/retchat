@@ -10,6 +10,16 @@ Chat without servers and end-to-end encrypted over the Reticulum mesh using [LXM
 
 The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
 
+![Direct chat on the desktop](data/screenshots/desktop-chat.png)
+
+<p align="center">
+  <img src="data/screenshots/mobile.png" alt="Chat list, conversation and discover tab on a phone">
+</p>
+
+![Relay chat channel in dark style](data/screenshots/desktop-relay-dark.png)
+
+<sub>Screenshots use dummy data and are generated with `data/screenshots/generate_screenshots.py`.</sub>
+
 ---
 
 ## Features
@@ -116,6 +126,8 @@ retchat/
 ├── data/icons/
 │   ├── generate_icon.py               # Generates the app icon (ratchet-wheel speech bubble)
 │   └── hicolor/                       # Scalable and symbolic app icon
+├── data/screenshots/
+│   └── generate_screenshots.py        # Renders the README screenshots with dummy data (headless)
 └── retchat/
     ├── app.py                         # Adw.Application: lifecycle, CSS, icons, about dialog
     ├── window.py                      # Main window (split view, breakpoints, menus, actions)
