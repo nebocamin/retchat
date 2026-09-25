@@ -92,6 +92,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         # Connect Service Callbacks
         self.service.add_message_received_callback(self._on_service_message_received)
         self.service.add_message_state_callback(self._on_service_message_state)
+        self.service.add_message_id_callback(self.chat_view.replace_message_hash)
         self.service.add_announce_callback(self._on_service_announce_received)
         self.service.add_path_resolved_callback(self._on_service_path_resolved)
         self.service.add_conversations_changed_callback(self._on_service_conversations_changed)

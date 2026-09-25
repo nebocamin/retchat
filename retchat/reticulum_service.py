@@ -105,6 +105,36 @@ def install_quiet_ui():
     return _orig_spawn
 
 
+_outbound_state_listener: Optional[Callable[[LXMF.LXMessage], None]] = None
+
+
+def install_delivery_hook(listener: Callable[[LXMF.LXMessage], None]):
+    """Report state changes of sent messages to ``listener``.
+
+    NomadNet registers Conversation.message_notification as delivery and
+    failure callback on every LXMessage it sends (the object the router
+    holds). The hook runs after NomadNet's handling, so a failed direct
+    delivery that NomadNet retries via the propagation node is reported
+    as sending again, not as failed. Called from Reticulum threads.
+    """
+    global _outbound_state_listener
+    _outbound_state_listener = listener
+    if getattr(Conversation.message_notification, "_retchat_hook", False):
+        return
+    original = Conversation.message_notification
+
+    def message_notification(conversation, message):
+        original(conversation, message)
+        if _outbound_state_listener is not None:
+            try:
+                _outbound_state_listener(message)
+            except Exception as e:
+                RNS.log(f"Retchat: Error reporting message state: {e}", RNS.LOG_ERROR)
+
+    message_notification._retchat_hook = True
+    Conversation.message_notification = message_notification
+
+
 class _RetchatApp(nomadnet.NomadNetworkApp):
     """NomadNetworkApp subclass that intercepts delivery events for Retchat."""
 
@@ -129,6 +159,7 @@ class ReticulumService:
         # Callbacks for UI updates
         self._message_received_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._message_state_callbacks: List[Callable[[str, int], None]] = []
+        self._message_id_callbacks: List[Callable[[str, str], None]] = []
         self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._path_resolved_callbacks: List[Callable[[str, int], None]] = []
         self._conversations_changed_callbacks: List[Callable[[], None]] = []
@@ -140,10 +171,12 @@ class ReticulumService:
         install_quiet_ui()
 
         Conversation.created_callback = self._on_conversations_changed_nomadnet
+        install_delivery_hook(self._on_outbound_state)
         self.app = _RetchatApp(self, configdir=self._configdir, rnsconfigdir=self._rnsconfigdir)
 
         self._conv_cache: Dict[str, Conversation] = {}
-        self._pending: Dict[str, List[str]] = {}
+        # dest hash -> queued (content, image_path, temporary message hash)
+        self._pending: Dict[str, List[Tuple[str, Optional[str], str]]] = {}
 
         # Hook announce logger on app.directory to dispatch announces without extra overhead
         self._hook_directory_announces()
@@ -824,7 +857,6 @@ class ReticulumService:
 
         conv = self.conversation(dest_hex)
         now = time.time()
-        temp_hash = f"out_{int(now*1000)}"
 
         # Prepare image field if image_path is provided
         fields = None
@@ -834,47 +866,29 @@ class ReticulumService:
             if img_bytes:
                 fields = {LXMF.FIELD_IMAGE: [fmt, img_bytes]}
 
-        if not self.peer_known(dest_hex):
-            self._pending.setdefault(dest_hex, []).append((content, image_path))
-            Conversation.query_for_peer(dest_hex)
-            return {
-                "message_hash": temp_hash,
-                "conversation_hash": dest_hex,
-                "sender_hash": self.delivery_destination_hex,
-                "recipient_hash": dest_hex,
-                "is_outgoing": True,
-                "content": content,
-                "timestamp": now,
-                "state": STATE_SENDING,
-                "hops": 0,
-                "image_path": img_info["path"] if img_info else image_path,
-                "image_name": img_info["name"] if img_info else (os.path.basename(image_path) if image_path else None),
-                "image_size": img_info["size"] if img_info else None,
-            }
-
-        try:
-            conv.send(content=content, fields=fields)
-        except Exception as e:
-            RNS.log(f"Retchat: Error sending message to {dest_hex}: {e}", RNS.LOG_ERROR)
-            raise
-
-        try:
-            conv.scan_storage()
-        except Exception:
-            pass
-
-        # The message file is named by the LXMF hash, so this needs no disk read.
-        # (Delivery callbacks must go on the LXMessage the router holds; a copy
-        # loaded from disk never gets them and would only stay in memory.)
-        msg_hash = temp_hash
-        if conv.messages:
-            last_m = sorted(conv.messages, key=lambda m: m.sort_timestamp)[-1]
+        msg_hash = None
+        if self.peer_known(dest_hex):
             try:
-                if last_m.get_hash():
-                    msg_hash = last_m.get_hash().hex()
-            except Exception:
-                pass
-            _release(last_m)
+                sent = conv.send(content=content, fields=fields)
+            except Exception as e:
+                RNS.log(f"Retchat: Error sending message to {dest_hex}: {e}", RNS.LOG_ERROR)
+                raise
+            if sent and conv.messages:
+                # NomadNet appends the sent message itself; its file is named by
+                # the LXMF hash, so this needs no disk read. Delivery state
+                # changes arrive via _on_outbound_state() with that hash.
+                sent_m = conv.messages[-1]
+                if sent_m.get_hash():
+                    msg_hash = sent_m.get_hash().hex()
+                _release(sent_m)
+
+        if msg_hash is None:
+            # Recipient not known yet: queue until its announce/path arrives
+            # (flush_pending), then report the final hash via the message id
+            # callbacks so the shown bubble can follow the delivery state.
+            msg_hash = f"out_{os.urandom(8).hex()}"
+            self._pending.setdefault(dest_hex, []).append((content, image_path, msg_hash))
+            Conversation.query_for_peer(dest_hex)
 
         hops = 0
         try:
@@ -914,13 +928,11 @@ class ReticulumService:
                 Conversation.query_for_peer(dest_hex)
                 continue
             queued = self._pending.pop(dest_hex)
-            for item in queued:
+            for content, img_p, temp_hash in queued:
                 try:
-                    if isinstance(item, tuple):
-                        content, img_p = item
-                        self.send_message(dest_hex, content, image_path=img_p)
-                    else:
-                        self.send_message(dest_hex, item)
+                    result = self.send_message(dest_hex, content, image_path=img_p)
+                    if result["message_hash"] != temp_hash:
+                        GLib.idle_add(self._notify_message_id, temp_hash, result["message_hash"])
                 except Exception as e:
                     RNS.log(f"Retchat: Failed to send pending message: {e}", RNS.LOG_ERROR)
             sent.append(dest_hex)
@@ -1097,6 +1109,10 @@ class ReticulumService:
     def add_message_state_callback(self, cb: Callable[[str, int], None]):
         self._message_state_callbacks.append(cb)
 
+    def add_message_id_callback(self, cb: Callable[[str, str], None]):
+        """cb(temporary_hash, lxmf_hash): a queued message was sent and got its final id."""
+        self._message_id_callbacks.append(cb)
+
     def add_announce_callback(self, cb: Callable[[Dict[str, Any]], None]):
         self._announce_callbacks.append(cb)
 
@@ -1115,6 +1131,21 @@ class ReticulumService:
                 cb(msg_dict)
             except Exception as e:
                 RNS.log(f"Retchat: Error in message received callback: {e}", RNS.LOG_ERROR)
+        return False
+
+    def _on_outbound_state(self, message: LXMF.LXMessage):
+        """Delivery state of a sent message changed (Reticulum thread)."""
+        if message.hash is None:
+            return
+        state = map_lxmf_state_to_ui(message.state, is_outgoing=True)
+        GLib.idle_add(self._notify_message_state, message.hash.hex(), state)
+
+    def _notify_message_id(self, old_hash: str, new_hash: str) -> bool:
+        for cb in self._message_id_callbacks:
+            try:
+                cb(old_hash, new_hash)
+            except Exception as e:
+                RNS.log(f"Retchat: Error in message id callback: {e}", RNS.LOG_ERROR)
         return False
 
     def _notify_message_state(self, message_hash: str, state: int) -> bool:

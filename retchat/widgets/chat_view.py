@@ -213,6 +213,13 @@ class ChatView(Adw.Bin):
         if item is not None:
             item.state = state
 
+    def replace_message_hash(self, old_hash: str, new_hash: str):
+        """A queued message was sent and got its LXMF hash; follow it from now on."""
+        item = self._items.pop(old_hash, None)
+        if item is not None:
+            item.message_hash = new_hash
+            self._items[new_hash] = item
+
     def _update_empty_state(self):
         empty = self.history.store.get_n_items() == 0
         self.history_stack.set_visible_child_name("empty" if empty else "messages")
