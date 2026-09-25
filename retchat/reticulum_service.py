@@ -28,6 +28,30 @@ STATE_SENT = 1
 STATE_DELIVERED = 2
 STATE_FAILED = 3
 
+def _release(m: ConversationMessage):
+    """Drop a fully loaded LXMF message (content, fields, image data) again.
+
+    NomadNet's ConversationMessage.load() keeps the whole LXMessage in
+    ``m.lxm`` until unload(); conversations are cached for the app's
+    lifetime, so every message Retchat ever read would stay in memory.
+    Hash, state, content, title and timestamp stay available afterwards
+    from NomadNet's per-message cache and index.
+    """
+    if getattr(m, "lxm", None) is not None:
+        m.unload()
+
+
+def _source_hash(m: ConversationMessage) -> Optional[bytes]:
+    # NomadNet has no public getter; the value is restored from its index,
+    # so this usually avoids reading the message file at all.
+    cached = getattr(m, "_cached_source_hash", None)
+    if cached is not None:
+        return cached
+    if not m.loaded:
+        m.load()
+    return m.lxm.source_hash if m.lxm is not None else None
+
+
 # Truncated destination hash (16 bytes) and full LXMF message hash (32 bytes) as hex
 _HEX_DEST_RE = re.compile(r"[0-9a-f]{32}")
 _HEX_MSG_RE = re.compile(r"[0-9a-f]{64}")
@@ -441,6 +465,7 @@ class ReticulumService:
                                 last_text = "📷 Bild"
                     except Exception:
                         pass
+                    _release(last_m)
 
                 hops = 0
                 try:
@@ -601,7 +626,14 @@ class ReticulumService:
             except Exception:
                 pass
 
-        # 2. Check if m has in-memory fields or unstripped fields
+        # 2. Check if m has in-memory fields or unstripped fields.
+        # has_attachments() answers from NomadNet's index (images count as
+        # attachments), so plain text messages are not read from disk.
+        try:
+            if hasattr(m, "has_attachments") and not m.has_attachments():
+                return None
+        except Exception:
+            pass
         try:
             fields = m.get_fields() if hasattr(m, "get_fields") else {}
             if fields and isinstance(fields, dict):
@@ -753,21 +785,21 @@ class ReticulumService:
         own_hash = self.delivery_destination_hex.lower()
         out = []
 
+        # The getters use NomadNet's per-message cache/index. It drops the cached
+        # state when a message file changes (scan_storage), so states stay current
+        # without reading every message file again.
         for m in sorted_msgs:
             try:
-                m.load()
                 content = (m.get_content() or "").strip()
                 title = m.get_title() or ""
                 ts = m.get_timestamp() or m.sort_timestamp
                 raw_state = m.get_state()
                 msg_hash = m.get_hash().hex() if m.get_hash() else f"msg_{int(ts*1000)}"
 
-                is_outgoing = False
-                if m.lxm is not None and m.lxm.source_hash:
-                    src_hex = m.lxm.source_hash.hex().lower()
-                    is_outgoing = (src_hex == own_hash)
+                src = _source_hash(m)
+                is_outgoing = bool(src) and src.hex().lower() == own_hash
 
-                hops = getattr(m.lxm, "hops", 0) if m.lxm else 0
+                hops = 0  # LXMF messages don't carry a hop count
                 state = map_lxmf_state_to_ui(raw_state, is_outgoing)
                 image_info = self._find_image_for_message(m, msg_hash)
 
@@ -788,6 +820,8 @@ class ReticulumService:
                 })
             except Exception as e:
                 RNS.log(f"Retchat: Error loading message: {e}", RNS.LOG_ERROR)
+            finally:
+                _release(m)
 
         return out
 
@@ -837,24 +871,18 @@ class ReticulumService:
         except Exception:
             pass
 
+        # The message file is named by the LXMF hash, so this needs no disk read.
+        # (Delivery callbacks must go on the LXMessage the router holds; a copy
+        # loaded from disk never gets them and would only stay in memory.)
         msg_hash = temp_hash
         if conv.messages:
             last_m = sorted(conv.messages, key=lambda m: m.sort_timestamp)[-1]
             try:
-                last_m.load()
                 if last_m.get_hash():
                     msg_hash = last_m.get_hash().hex()
-                if last_m.lxm:
-                    def _cb_delivered(m):
-                        h = m.hash.hex()
-                        GLib.idle_add(self._notify_message_state, h, STATE_DELIVERED)
-                    def _cb_failed(m):
-                        h = m.hash.hex()
-                        GLib.idle_add(self._notify_message_state, h, STATE_FAILED)
-                    last_m.lxm.register_delivery_callback(_cb_delivered)
-                    last_m.lxm.register_failed_callback(_cb_failed)
             except Exception:
                 pass
+            _release(last_m)
 
         hops = 0
         try:
