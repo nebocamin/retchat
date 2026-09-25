@@ -25,10 +25,16 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
 ## Features
 
 - **Direct messages over LXMF**
-  - Delivery status for sent messages: sending, sent (✓), delivered (✓✓), failed.
-  - Send and receive images, with a built-in image viewer.
+  - Live delivery status for sent messages: sending, sent to a propagation node (✓), delivered (✓✓), failed.
   - Rename contacts, copy their address, request a path through the mesh.
   - Delete chats from the chat menu, or by right click / long press in the chat list.
+- **Images and files**
+  - Images are downscaled before sending and shown inline, with a built-in image viewer.
+  - Send any other file up to 900 KB (LXMF receivers accept 1000 KB per message by default). Files above 256 KB
+    can only be delivered directly, not via propagation nodes – Retchat points this out before sending.
+  - Received files show their type, name and size and can be opened or saved. Executables and scripts can only be
+    saved, not opened directly.
+  - Works with attachments from other LXMF clients (file attachments, images, voice messages).
 - **Discover peers on the mesh**
   - The *Entdecken* (discover) tab lists `lxmf.delivery` announces with display name, address and hop count.
   - Start a chat with a single click.
@@ -101,7 +107,7 @@ Retchat uses [NomadNet](https://github.com/markqvist/NomadNet) as its LXMF backe
 |---|---|
 | `~/.nomadnetwork/storage/identity` | Your Reticulum identity (private key) |
 | `~/.nomadnetwork/storage/conversations/` | Messages |
-| `~/.nomadnetwork/storage/attachments/` | Received images and files |
+| `~/.nomadnetwork/storage/attachments/` | Images and files of received and sent messages |
 | `~/.nomadnetwork/config` | NomadNet settings, e.g. announce interval (default: at start and every 6 hours) |
 | `~/.reticulum/config` | Reticulum interfaces; on first start Retchat makes sure a TCP interface is configured |
 | `~/.local/share/retchat/retchat.db` | Retchat's own data: custom contact names and settings |
@@ -134,7 +140,8 @@ retchat/
     ├── widgets/
     │   ├── chat_history.py            # Gtk.ListView history that keeps the newest message in view
     │   ├── chat_view.py               # Direct chat: history and composer
-    │   ├── message_bubble.py          # Message bubble with image and delivery status
+    │   ├── message_bubble.py          # Message bubble with image, files and delivery status
+    │   ├── attachment_row.py          # File attachment row (open / save) and file helpers
     │   ├── conversation_row.py        # Row in the chat list
     │   └── announce_row.py            # Row in the discover list
     └── dialogs/

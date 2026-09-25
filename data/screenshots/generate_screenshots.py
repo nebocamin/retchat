@@ -113,7 +113,15 @@ CONTACTS = [
 ]
 
 
-def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None):
+DATASHEET = os.path.join("/tmp", "retchat-screenshot-datasheet")
+
+
+def make_datasheet(path):
+    with open(path, "wb") as f:
+        f.write(b"%PDF-1.4\n" + b"0" * 184_000)
+
+
+def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None, files=None):
     return {
         "message_hash": f"{conv}{n:04d}",
         "conversation_hash": conv,
@@ -125,6 +133,7 @@ def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None):
         "image_path": image,
         "image_name": "sunset.png" if image else None,
         "image_size": os.path.getsize(image) if image else None,
+        "files": files or [],
     }
 
 
@@ -139,6 +148,9 @@ def build_messages():
                       "four hops, no internet involved at all.", at(18, 9), out=True),
             msg(a, 5, "Here's the view from my mast tonight", at(18, 21), hops=2, image=PHOTO),
             msg(a, 6, "Wow, that looks amazing!", at(18, 23), out=True),
+            msg(a, 9, "Datasheet of the antenna, in case you want one too", at(18, 23), hops=2,
+                files=[{"path": DATASHEET, "name": "collinear-868-datasheet.pdf",
+                        "size": os.path.getsize(DATASHEET)}]),
             msg(a, 7, "Want to meet at the hill on Saturday and test the range?", at(18, 24), hops=2),
             msg(a, 8, "Absolutely, I'll bring the portable node!", at(18, 26), out=True, state=0),
         ],
@@ -293,6 +305,7 @@ class ShotApp(retchat_app.RetchatApp):
 
     def run_shots(self):
         make_photo(PHOTO)
+        make_datasheet(DATASHEET)
 
         win = self.new_window(1040, 700)
         self.select_chat(win, ALICE)
