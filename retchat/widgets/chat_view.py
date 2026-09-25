@@ -6,12 +6,14 @@ from typing import Any, Callable, Dict, List, Optional
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from retchat.dialogs.image_viewer_dialog import ImageViewerDialog
 from retchat.models import MessageItem
+from retchat.reticulum_service import MAX_ATTACHMENT_SIZE, PROPAGATION_SIZE_LIMIT, is_sendable_image
+from retchat.widgets.attachment_row import file_icon, is_executable, named_copy
 from retchat.widgets.chat_history import CONTENT_MAX_WIDTH, ChatHistory
-from retchat.widgets.message_bubble import MessageBubble
+from retchat.widgets.message_bubble import MessageBubble, load_thumbnail
 
 
 class ChatView(Adw.Bin):
@@ -28,7 +30,7 @@ class ChatView(Adw.Bin):
 
         self.current_dest_hash: Optional[str] = None
         self.current_conv_data: Optional[Dict[str, Any]] = None
-        self.pending_image_path: Optional[str] = None
+        self.pending_attachment_path: Optional[str] = None
 
         self._items: Dict[str, MessageItem] = {}
         self.history = ChatHistory(
@@ -43,6 +45,15 @@ class ChatView(Adw.Bin):
 
         self.history.store.connect("items-changed", lambda *_: self._update_empty_state())
         self._update_empty_state()
+
+        # Actions of the attachment rows in the bubbles (target: path, name)
+        actions = Gio.SimpleActionGroup()
+        for name, handler in (("open-attachment", self._open_attachment),
+                              ("save-attachment", self._save_attachment)):
+            action = Gio.SimpleAction.new(name, GLib.VariantType.new("(ss)"))
+            action.connect("activate", lambda _a, p, fn=handler: fn(*p.unpack()))
+            actions.add_action(action)
+        self.insert_action_group("chat", actions)
 
     # --- UI construction ------------------------------------------------------
 
@@ -78,7 +89,7 @@ class ChatView(Adw.Bin):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.add_css_class("composer")
 
-        # Attachment preview chip
+        # Attachment preview chip: image thumbnail or file type icon, name and size
         self.preview_box = Gtk.Box(spacing=8, visible=False)
         self.preview_box.add_css_class("attachment-chip")
         self.preview_thumb = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
@@ -86,19 +97,27 @@ class ChatView(Adw.Bin):
         self.preview_thumb.set_overflow(Gtk.Overflow.HIDDEN)
         self.preview_thumb.add_css_class("attachment-thumb")
         self.preview_box.append(self.preview_thumb)
-        self.preview_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.MIDDLE, hexpand=True, xalign=0.0)
-        self.preview_box.append(self.preview_label)
-        remove_btn = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Bild entfernen",
+        self.preview_icon = Gtk.Image(pixel_size=32, valign=Gtk.Align.CENTER)
+        self.preview_box.append(self.preview_icon)
+        preview_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+        self.preview_label = Gtk.Label(ellipsize=Pango.EllipsizeMode.MIDDLE, xalign=0.0)
+        preview_text.append(self.preview_label)
+        self.preview_hint = Gtk.Label(xalign=0.0, wrap=True,
+                                      label="Nur direkt zustellbar, zu groß für Propagation-Nodes")
+        self.preview_hint.add_css_class("attachment-hint")
+        preview_text.append(self.preview_hint)
+        self.preview_box.append(preview_text)
+        remove_btn = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Anhang entfernen",
                                 valign=Gtk.Align.CENTER)
         remove_btn.add_css_class("flat")
         remove_btn.add_css_class("circular")
-        remove_btn.connect("clicked", lambda _b: self._clear_pending_image())
+        remove_btn.connect("clicked", lambda _b: self._clear_pending_attachment())
         self.preview_box.append(remove_btn)
         box.append(self.preview_box)
 
         # Input row
         row = Gtk.Box(spacing=6)
-        attach_btn = Gtk.Button(icon_name="mail-attachment-symbolic", tooltip_text="Bild anhängen",
+        attach_btn = Gtk.Button(icon_name="mail-attachment-symbolic", tooltip_text="Datei anhängen",
                                 valign=Gtk.Align.CENTER)
         attach_btn.add_css_class("flat")
         attach_btn.add_css_class("circular")
@@ -146,7 +165,7 @@ class ChatView(Adw.Bin):
         self.current_dest_hash = None
         self.current_conv_data = None
         self._items = {}
-        self._clear_pending_image()
+        self._clear_pending_attachment()
         self.entry.set_text("")
         self.history.replace([])
         self.window_title.set_title("Chat")
@@ -186,7 +205,7 @@ class ChatView(Adw.Bin):
         """Replace the shown conversation and jump to the newest message."""
         self.current_conv_data = conv_data
         self.current_dest_hash = conv_data["destination_hash"].lower()
-        self._clear_pending_image()
+        self._clear_pending_attachment()
         self.update_header(conv_data)
         self._update_menu()
 
@@ -227,48 +246,61 @@ class ChatView(Adw.Bin):
     # --- Composer -------------------------------------------------------------
 
     def _update_send_sensitivity(self):
-        has_content = bool(self.entry.get_text().strip()) or self.pending_image_path is not None
+        has_content = bool(self.entry.get_text().strip()) or self.pending_attachment_path is not None
         self.send_btn.set_sensitive(has_content)
 
     def _send(self):
         text = self.entry.get_text().strip()
-        image_path = self.pending_image_path
-        if not self.current_dest_hash or (not text and not image_path):
+        attachment = self.pending_attachment_path
+        if not self.current_dest_hash or (not text and not attachment):
             return
         self.entry.set_text("")
-        self._clear_pending_image()
+        self._clear_pending_attachment()
         # Jump to the end and stick there, so the own message is followed.
         self.history.scroll_to_bottom()
-        self._on_send_message(self.current_dest_hash, text, image_path)
+        self._on_send_message(self.current_dest_hash, text, attachment)
 
-    def _set_pending_image(self, file_path: str):
-        if not os.path.isfile(file_path):
-            return
-        self.pending_image_path = file_path
-        name = os.path.basename(file_path)
-        self.preview_label.set_text(f"{name} ({os.path.getsize(file_path) / 1024:.1f} KB)")
+    def _set_pending_attachment(self, file_path: str):
         try:
-            self.preview_thumb.set_paintable(Gdk.Texture.new_from_file(Gio.File.new_for_path(file_path)))
-        except GLib.Error:
-            self.preview_thumb.set_paintable(None)
+            size = os.path.getsize(file_path)
+        except OSError:
+            return
+        name = os.path.basename(file_path)
+        image = is_sendable_image(file_path)
+        # Images are downscaled before sending, so only files are limited here.
+        if not image and size > MAX_ATTACHMENT_SIZE:
+            self._toast(f"«{name}» ist zu groß ({GLib.format_size(size)}, "
+                        f"höchstens {GLib.format_size(MAX_ATTACHMENT_SIZE)})")
+            return
+
+        self.pending_attachment_path = file_path
+        self.preview_label.set_text(f"{name} ({GLib.format_size(size)})")
+        texture = load_thumbnail(file_path, os.path.getmtime(file_path)) if image else None
+        self.preview_thumb.set_paintable(texture)
+        self.preview_thumb.set_visible(texture is not None)
+        self.preview_icon.set_from_gicon(file_icon(name, file_path))
+        self.preview_icon.set_visible(texture is None)
+        self.preview_hint.set_visible(not image and size > PROPAGATION_SIZE_LIMIT)
         self.preview_box.set_visible(True)
         self._update_send_sensitivity()
         self.entry.grab_focus()
 
-    def _clear_pending_image(self):
-        self.pending_image_path = None
+    def _clear_pending_attachment(self):
+        self.pending_attachment_path = None
         self.preview_thumb.set_paintable(None)
         self.preview_box.set_visible(False)
         self._update_send_sensitivity()
 
     def _on_attach_clicked(self, _btn):
-        image_filter = Gtk.FileFilter(name="Bilder")
-        for mime in ("image/jpeg", "image/png", "image/webp", "image/gif"):
-            image_filter.add_mime_type(mime)
+        all_files = Gtk.FileFilter(name="Alle Dateien")
+        all_files.add_pattern("*")
+        images = Gtk.FileFilter(name="Bilder")
+        images.add_mime_type("image/*")
         filters = Gio.ListStore(item_type=Gtk.FileFilter)
-        filters.append(image_filter)
+        filters.append(all_files)
+        filters.append(images)
 
-        dialog = Gtk.FileDialog(title="Bild auswählen", filters=filters, default_filter=image_filter)
+        dialog = Gtk.FileDialog(title="Datei anhängen", filters=filters, default_filter=all_files)
         dialog.open(self.get_root(), None, self._on_attach_finished)
 
     def _on_attach_finished(self, dialog: Gtk.FileDialog, result: Gio.AsyncResult):
@@ -277,7 +309,52 @@ class ChatView(Adw.Bin):
         except GLib.Error:
             return  # dismissed
         if file and file.get_path():
-            self._set_pending_image(file.get_path())
+            self._set_pending_attachment(file.get_path())
+
+    # --- Attachments in bubbles --------------------------------------------------
+
+    def _toast(self, text: str):
+        overlay = self.get_ancestor(Adw.ToastOverlay)
+        if overlay is not None:
+            overlay.add_toast(Adw.Toast(title=text, timeout=3))
+
+    def _open_attachment(self, path: str, name: str):
+        if is_executable(name, path):  # the button is hidden; also refuse here
+            self._toast(f"«{name}» ist ausführbar und wird nicht geöffnet. Speichere die Datei, um sie zu prüfen.")
+            return
+        try:
+            copy = named_copy(path, name)
+        except OSError as e:
+            self._toast(f"Datei kann nicht geöffnet werden: {e.strerror or e}")
+            return
+        launcher = Gtk.FileLauncher(file=Gio.File.new_for_path(copy))
+        launcher.launch(self.get_root(), None, self._on_launch_finished)
+
+    def _on_launch_finished(self, launcher: Gtk.FileLauncher, result: Gio.AsyncResult):
+        try:
+            launcher.launch_finish(result)
+        except GLib.Error as e:
+            if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+                self._toast(f"Keine Anwendung zum Öffnen gefunden ({e.message})")
+
+    def _save_attachment(self, path: str, name: str):
+        dialog = Gtk.FileDialog(title="Datei speichern", initial_name=name)
+        dialog.save(self.get_root(), None, self._on_save_finished, path)
+
+    def _on_save_finished(self, dialog: Gtk.FileDialog, result: Gio.AsyncResult, path: str):
+        try:
+            target = dialog.save_finish(result)
+        except GLib.Error:
+            return  # dismissed
+        self.save_attachment_to(path, target)
+
+    def save_attachment_to(self, path: str, target: Gio.File):
+        try:
+            Gio.File.new_for_path(path).copy(target, Gio.FileCopyFlags.OVERWRITE, None, None)
+        except GLib.Error as e:
+            self._toast(f"Speichern fehlgeschlagen: {e.message}")
+            return
+        self._toast(f"Gespeichert: {target.get_basename()}")
 
     def _on_image_clicked(self, item: MessageItem):
         ImageViewerDialog(

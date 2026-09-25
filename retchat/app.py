@@ -10,6 +10,7 @@ from gi.repository import Gtk, Adw, Gdk, Gio
 
 from retchat.database import Database
 from retchat.reticulum_service import ReticulumService
+from retchat.widgets.attachment_row import purge_open_copies
 from retchat.window import RetchatWindow
 
 APP_ID = "org.selfmade.Retchat"
@@ -34,6 +35,7 @@ class RetchatApp(Adw.Application):
         # Load custom CSS
         self._load_css()
         self._setup_icons()
+        purge_open_copies()  # copies made for opening attachments in other apps
 
         about_action = Gio.SimpleAction.new("about", None)
         about_action.connect("activate", lambda _a, _p: self._show_about())

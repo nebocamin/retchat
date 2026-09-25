@@ -11,6 +11,7 @@ gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 
 from retchat.models import MessageItem
+from retchat.widgets.attachment_row import AttachmentRow
 from retchat.reticulum_service import STATE_DELIVERED, STATE_FAILED, STATE_SENDING, STATE_SENT
 
 THUMB_MAX_WIDTH = 260
@@ -25,7 +26,7 @@ THUMB_CACHE_SIZE = 32
 
 
 @functools.lru_cache(maxsize=THUMB_CACHE_SIZE)
-def _load_thumbnail(path: str, _mtime: float) -> Optional[Gdk.Texture]:
+def load_thumbnail(path: str, _mtime: float) -> Optional[Gdk.Texture]:
     """Decode an image at thumbnail size (the mtime only invalidates the cache)."""
     max_w, max_h = THUMB_MAX_WIDTH * THUMB_DECODE_SCALE, THUMB_MAX_HEIGHT * THUMB_DECODE_SCALE
     try:
@@ -83,6 +84,10 @@ class MessageBubble(Gtk.Box):
         self.image_error.append(Gtk.Label(label="Bild konnte nicht geladen werden"))
         self.bubble.append(self.image_error)
 
+        # Other attachments (documents, audio, further images)
+        self.files_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.bubble.append(self.files_box)
+
         # Text
         self.label = Gtk.Label(
             wrap=True,
@@ -120,13 +125,16 @@ class MessageBubble(Gtk.Box):
 
         self._bind_image(item)
         has_image = self.picture.get_visible() or self.image_error.get_visible()
+        for f in item.files:
+            self.files_box.append(AttachmentRow(f["path"], f["name"], f["size"]))
+        self.files_box.set_visible(bool(item.files))
 
         classes = ["message-bubble", "outgoing" if outgoing else "incoming"]
         if has_image:
             classes.append("has-image")
         self.bubble.set_css_classes(classes)
 
-        text = item.content or ("" if has_image else "[Leere Nachricht]")
+        text = item.content or ("" if has_image or item.files else "[Leere Nachricht]")
         self.label.set_text(text)
         self.label.set_visible(bool(text))
 
@@ -144,6 +152,8 @@ class MessageBubble(Gtk.Box):
         self._item = None
         self._state_handler = 0
         self.picture.set_paintable(None)
+        while child := self.files_box.get_first_child():
+            self.files_box.remove(child)
 
     def _bind_image(self, item: MessageItem):
         path = item.image_path
@@ -153,7 +163,7 @@ class MessageBubble(Gtk.Box):
             return
 
         try:
-            texture = _load_thumbnail(path, os.path.getmtime(path))
+            texture = load_thumbnail(path, os.path.getmtime(path))
         except OSError:  # file missing
             texture = None
         self.picture.set_visible(texture is not None)

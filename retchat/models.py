@@ -1,6 +1,6 @@
 """GObject data models used by list-based widgets."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gi.repository import GObject
 
@@ -10,6 +10,9 @@ class MessageItem(GObject.Object):
 
     Only ``state`` changes during the lifetime of a message; bubbles listen to
     ``notify::state`` to update the delivery indicator.
+
+    ``files`` lists attachments other than the inline image as
+    ``{"path", "name", "size"}`` dicts (a plain attribute, it never changes).
     """
 
     __gtype_name__ = "RetchatMessageItem"
@@ -36,6 +39,7 @@ class MessageItem(GObject.Object):
             image_name=data.get("image_name"),
             image_size=int(data["image_size"]) if data.get("image_size") is not None else -1,
         )
+        self.files: List[Dict[str, Any]] = list(data.get("files") or [])
 
     @property
     def image_size_or_none(self) -> Optional[int]:

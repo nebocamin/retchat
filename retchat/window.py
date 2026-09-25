@@ -458,9 +458,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.open_conversation(dest_hash)
 
     # --- Sending Messages ---
-    def _on_send_message(self, dest_hash: str, content: str, image_path: Optional[str] = None):
+    def _on_send_message(self, dest_hash: str, content: str, attachment_path: Optional[str] = None):
         try:
-            msg_data = self.service.send_message(dest_hash, content, image_path=image_path)
+            msg_data = self.service.send_message(dest_hash, content, attachment_path=attachment_path)
             self.chat_view.append_message(msg_data)
 
             # Update conversation list
