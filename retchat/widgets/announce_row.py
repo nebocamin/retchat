@@ -1,7 +1,7 @@
 """Row widget for discovered mesh peers (Announces)."""
 
 import datetime
-from typing import Any, Callable, Dict
+from typing import Any, Dict
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -12,10 +12,9 @@ from retchat.widgets.conversation_row import avatar_text
 
 
 class AnnounceRow(Gtk.ListBoxRow):
-    def __init__(self, announce_data: Dict[str, Any], on_start_chat: Callable[[str, str], None]):
+    def __init__(self, announce_data: Dict[str, Any]):
         super().__init__()
         self.announce_data = announce_data
-        self.on_start_chat = on_start_chat
         self.dest_hash = announce_data["destination_hash"].lower()
 
         self.action_row = Adw.ActionRow()
@@ -36,10 +35,13 @@ class AnnounceRow(Gtk.ListBoxRow):
         self.suffix_box.append(self.hops_label)
 
         # Start Chat button
-        self.chat_btn = Gtk.Button(icon_name="mail-message-new-symbolic")
+        # Window action instead of a Python handler: a handler referencing the
+        # row would keep every removed row alive (see RelayHubRow).
+        self.chat_btn = Gtk.Button(icon_name="mail-message-new-symbolic",
+                                   action_name="win.announce-start-chat",
+                                   action_target=GLib.Variant.new_string(self.dest_hash))
         self.chat_btn.add_css_class("flat")
         self.chat_btn.set_tooltip_text("Chat mit diesem Kontakt starten")
-        self.chat_btn.connect("clicked", self._on_chat_clicked)
         self.suffix_box.append(self.chat_btn)
 
         self.action_row.add_suffix(self.suffix_box)
@@ -71,7 +73,3 @@ class AnnounceRow(Gtk.ListBoxRow):
 
         hops_text = "Lokal" if hops == 0 else f"{hops} Hop{'s' if hops > 1 else ''}"
         self.hops_label.set_text(hops_text)
-
-    def _on_chat_clicked(self, _btn):
-        name = self.announce_data.get("display_name") or ""
-        self.on_start_chat(self.dest_hash, name)

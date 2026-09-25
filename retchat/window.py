@@ -23,6 +23,11 @@ from retchat.widgets.relay_chat_view import RelayChatView
 from retchat.widgets.relay_room_row import RelayHubRow, RelayChannelRow, RelayAddChannelRow
 
 
+# On a public hub thousands of nodes announce; each row costs ~80 KB of widgets.
+# NomadNet itself keeps the last 256 announces per kind.
+MAX_ANNOUNCE_ROWS = 200
+
+
 def _remove_rows(list_box: Gtk.ListBox):
     """Remove all rows but keep the placeholder (remove_all() drops it too)."""
     while row := list_box.get_row_at_index(0):
@@ -127,6 +132,20 @@ class RetchatWindow(Adw.ApplicationWindow):
         action_delete = Gio.SimpleAction.new("delete_conversation", GLib.VariantType.new("s"))
         action_delete.connect("activate", lambda _a, p: self._confirm_delete_conversation(p.get_string()))
         self.add_action(action_delete)
+
+        # Row actions, targeted by hash. Sidebar rows use these instead of Python
+        # signal handlers, which would keep removed rows alive (see RelayHubRow).
+        for name, handler in (
+            ("announce-start-chat", lambda h: self._on_announce_start_chat(h, None)),
+            ("relay-hub-join-channel", self._show_join_channel_dialog),
+            ("relay-hub-connect", self._on_reconnect_relay_hub),
+            ("relay-hub-disconnect", self._on_disconnect_relay_hub),
+            ("relay-hub-copy-address", self._copy_hub_hash_to_clipboard),
+            ("relay-hub-remove", self._confirm_remove_relay_hub),
+        ):
+            action = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
+            action.connect("activate", lambda _a, param, fn=handler: fn(param.get_string()))
+            self.add_action(action)
 
         # Action: Request Path (win.request_path)
         self.action_path = Gio.SimpleAction.new("request_path", None)
@@ -557,11 +576,6 @@ class RetchatWindow(Adw.ApplicationWindow):
                 hub_name=hub_name,
                 is_connected=is_connected,
                 status_text=status_text,
-                on_add_channel=self._show_join_channel_dialog,
-                on_reconnect_hub=self._on_reconnect_relay_hub,
-                on_disconnect_hub=self._on_disconnect_relay_hub,
-                on_copy_hub_hash=self._copy_hub_hash_to_clipboard,
-                on_remove_hub=self._confirm_remove_relay_hub
             )
             self.relay_hub_rows[hub_hash] = hub_row
             self.relay_list_box.append(hub_row)
@@ -927,10 +941,19 @@ class RetchatWindow(Adw.ApplicationWindow):
             if hasattr(self, "empty_announce_btn"):
                 self.empty_announce_btn.set_visible(True)
 
-        for ann in announces:
-            row = AnnounceRow(ann, on_start_chat=self._on_announce_start_chat)
+        for ann in announces[:MAX_ANNOUNCE_ROWS]:
+            row = AnnounceRow(ann)
             self.announce_rows[ann["destination_hash"]] = row
             self.announce_list_box.append(row)
+
+    def _trim_announce_rows(self):
+        """Drop the oldest rows beyond MAX_ANNOUNCE_ROWS (new announces are prepended)."""
+        while len(self.announce_rows) > MAX_ANNOUNCE_ROWS:
+            last = self.announce_list_box.get_row_at_index(len(self.announce_rows) - 1)
+            if last is None:
+                break
+            self.announce_list_box.remove(last)
+            self.announce_rows.pop(last.dest_hash, None)
 
     def _on_announce_start_chat(self, dest_hash: str, display_name: str):
         self.service.start_conversation(dest_hash)
@@ -989,9 +1012,10 @@ class RetchatWindow(Adw.ApplicationWindow):
             if dest_hash in self.announce_rows:
                 self.announce_rows[dest_hash].update_data(announce_data)
             else:
-                row = AnnounceRow(announce_data, on_start_chat=self._on_announce_start_chat)
+                row = AnnounceRow(announce_data)
                 self.announce_rows[dest_hash] = row
                 self.announce_list_box.prepend(row)
+                self._trim_announce_rows()
 
     def _on_service_path_resolved(self, dest_hex: str, hops: int):
         dest_hex = dest_hex.lower()

@@ -4,34 +4,26 @@ from typing import Any, Callable, Dict, Optional
 
 import gi
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gtk, Pango, Gio
+from gi.repository import Gio, GLib, Gtk, Pango
 
 
 class RelayHubRow(Gtk.ListBoxRow):
-    """Header row representing a Reticulum Relay Chat (RRC) Hub."""
-    def __init__(
-        self,
-        hub_hash: str,
-        hub_name: str,
-        is_connected: bool,
-        status_text: str,
-        on_add_channel: Callable[[str, str], None],
-        on_reconnect_hub: Callable[[str], None],
-        on_disconnect_hub: Callable[[str], None],
-        on_copy_hub_hash: Callable[[str], None],
-        on_remove_hub: Callable[[str], None]
-    ):
+    """Header row representing a Reticulum Relay Chat (RRC) Hub.
+
+    The buttons and menu use window actions with the hub hash as target
+    (win.relay-hub-*), not Python signal handlers: a handler on a child widget
+    that references the row forms a cycle through GTK that Python's garbage
+    collector can't break, so every rebuilt row would stay in memory.
+    """
+
+    def __init__(self, hub_hash: str, hub_name: str, is_connected: bool, status_text: str):
         super().__init__()
 
         self.hub_hash = hub_hash.lower()
         self.hub_name = hub_name
         self.is_connected = is_connected
         self.status_text = status_text
-        self.on_add_channel = on_add_channel
-        self.on_reconnect_hub = on_reconnect_hub
-        self.on_disconnect_hub = on_disconnect_hub
-        self.on_copy_hub_hash = on_copy_hub_hash
-        self.on_remove_hub = on_remove_hub
+        target = GLib.Variant.new_string(self.hub_hash)
 
         self.add_css_class("conversation-row")
         self.add_css_class("hub-header-row")
@@ -66,27 +58,13 @@ class RelayHubRow(Gtk.ListBoxRow):
         main_box.append(text_box)
 
         # Quick '+' button to join channel on this hub
-        self.add_btn = Gtk.Button(icon_name="list-add-symbolic")
+        self.add_btn = Gtk.Button(icon_name="list-add-symbolic", action_name="win.relay-hub-join-channel",
+                                  action_target=target)
         self.add_btn.add_css_class("flat")
         self.add_btn.add_css_class("circular")
         self.add_btn.set_valign(Gtk.Align.CENTER)
         self.add_btn.set_tooltip_text("Kanal zu diesem Hub hinzufügen")
-        self.add_btn.connect("clicked", lambda _b: self.on_add_channel(self.hub_hash, self.hub_name))
         main_box.append(self.add_btn)
-
-        # Hub options menu; actions live in a row-local "hub" action group
-        actions = Gio.SimpleActionGroup()
-        for name, callback in (
-            ("add-channel", lambda: self.on_add_channel(self.hub_hash, self.hub_name)),
-            ("connect", lambda: self.on_reconnect_hub(self.hub_hash)),
-            ("disconnect", lambda: self.on_disconnect_hub(self.hub_hash)),
-            ("copy-address", lambda: self.on_copy_hub_hash(self.hub_hash)),
-            ("remove", lambda: self.on_remove_hub(self.hub_hash)),
-        ):
-            action = Gio.SimpleAction.new(name, None)
-            action.connect("activate", lambda _a, _p, cb=callback: cb())
-            actions.add_action(action)
-        self.insert_action_group("hub", actions)
 
         self.menu_btn = Gtk.MenuButton(icon_name="view-more-symbolic")
         self.menu_btn.add_css_class("flat")
@@ -99,17 +77,23 @@ class RelayHubRow(Gtk.ListBoxRow):
         self.set_child(main_box)
 
     def _build_menu(self):
-        menu = Gio.Menu()
+        def item(label: str, action: str) -> Gio.MenuItem:
+            menu_item = Gio.MenuItem.new(label, None)
+            menu_item.set_action_and_target_value(action, GLib.Variant.new_string(self.hub_hash))
+            return menu_item
+
         section = Gio.Menu()
-        section.append("Kanal beitreten…", "hub.add-channel")
+        section.append_item(item("Kanal beitreten…", "win.relay-hub-join-channel"))
         if self.is_connected:
-            section.append("Trennen", "hub.disconnect")
+            section.append_item(item("Trennen", "win.relay-hub-disconnect"))
         else:
-            section.append("Verbinden", "hub.connect")
-        section.append("Hub-Adresse kopieren", "hub.copy-address")
-        menu.append_section(None, section)
+            section.append_item(item("Verbinden", "win.relay-hub-connect"))
+        section.append_item(item("Hub-Adresse kopieren", "win.relay-hub-copy-address"))
         danger = Gio.Menu()
-        danger.append("Hub entfernen", "hub.remove")
+        danger.append_item(item("Hub entfernen", "win.relay-hub-remove"))
+
+        menu = Gio.Menu()
+        menu.append_section(None, section)
         menu.append_section(None, danger)
         self.menu_btn.set_menu_model(menu)
 
