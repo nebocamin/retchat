@@ -7,7 +7,8 @@ from typing import Callable, Optional
 
 import gi
 gi.require_version('Gtk', '4.0')
-from gi.repository import Gdk, Gio, GLib, Gtk, Pango
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 
 from retchat.models import MessageItem
 from retchat.reticulum_service import STATE_DELIVERED, STATE_FAILED, STATE_SENDING, STATE_SENT
@@ -16,14 +17,29 @@ THUMB_MAX_WIDTH = 260
 THUMB_MAX_HEIGHT = 320
 THUMB_MIN_WIDTH = 80
 THUMB_MIN_HEIGHT = 60
+# Thumbnails are decoded at twice the display size, sharp on HiDPI screens.
+# A decoded thumbnail is at most 520x640 RGBA (1.3 MB) instead of e.g. 45 MB
+# for a full 4000x3000 photo.
+THUMB_DECODE_SCALE = 2
+THUMB_CACHE_SIZE = 32
 
 
-@functools.lru_cache(maxsize=64)
-def _load_texture(path: str) -> Optional[Gdk.Texture]:
+@functools.lru_cache(maxsize=THUMB_CACHE_SIZE)
+def _load_thumbnail(path: str, _mtime: float) -> Optional[Gdk.Texture]:
+    """Decode an image at thumbnail size (the mtime only invalidates the cache)."""
+    max_w, max_h = THUMB_MAX_WIDTH * THUMB_DECODE_SCALE, THUMB_MAX_HEIGHT * THUMB_DECODE_SCALE
     try:
-        return Gdk.Texture.new_from_file(Gio.File.new_for_path(path))
-    except GLib.Error:
+        _fmt, w, h = GdkPixbuf.Pixbuf.get_file_info(path)
+        if w <= max_w and h <= max_h:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)  # never upscale small images
+        else:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(path, max_w, max_h, True)
+        pixbuf = pixbuf.apply_embedded_orientation() or pixbuf  # EXIF rotation of phone photos
+    except (GLib.Error, TypeError):
         return None
+    memory_format = Gdk.MemoryFormat.R8G8B8A8 if pixbuf.get_has_alpha() else Gdk.MemoryFormat.R8G8B8
+    return Gdk.MemoryTexture.new(pixbuf.get_width(), pixbuf.get_height(), memory_format,
+                                 pixbuf.read_pixel_bytes(), pixbuf.get_rowstride())
 
 
 def _thumbnail_size(texture: Gdk.Texture) -> tuple[int, int]:
@@ -136,7 +152,10 @@ class MessageBubble(Gtk.Box):
             self.image_error.set_visible(False)
             return
 
-        texture = _load_texture(path) if os.path.isfile(path) else None
+        try:
+            texture = _load_thumbnail(path, os.path.getmtime(path))
+        except OSError:  # file missing
+            texture = None
         self.picture.set_visible(texture is not None)
         self.image_error.set_visible(texture is None)
         if texture is not None:
