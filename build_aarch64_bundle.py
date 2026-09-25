@@ -17,7 +17,12 @@ BUNDLE_PATH = os.path.join(BASE_DIR, "retchat-aarch64.flatpak")
 
 def main():
     print("=== 1. Downloading aarch64 wheels from PyPI ===")
-    os.makedirs(WHEELS_DIR, exist_ok=True)
+    # Start empty: all wheels in this directory get unpacked, so leftovers of
+    # older builds would mix several versions of a package into the bundle.
+    # (pip's own cache keeps re-downloading cheap.)
+    if os.path.exists(WHEELS_DIR):
+        shutil.rmtree(WHEELS_DIR)
+    os.makedirs(WHEELS_DIR)
     pkgs = [
         "rns", "lxmf", "msgpack", "cryptography",
         "pyserial", "cffi", "pycparser", "setuptools", "wheel",
