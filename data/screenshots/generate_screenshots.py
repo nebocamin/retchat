@@ -151,28 +151,6 @@ def build_messages():
     }
 
 
-HUB = h(20)
-HUB_NAME = "Mesh Community Hub"
-
-
-def relay_messages():
-    t = at(19, 0)
-    rows = [
-        ("joined", "System", "", "mira joined #lora", 0, False),
-        ("msg", "mira", "m", "Anyone running SF9 on 868 MHz around here?", 60, False),
-        ("msg", "ole", "o", "Yes, bandwidth 125 kHz. Works great for chat, a bit slow for images.", 140, False),
-        ("action", "kai", "k", "is setting up a solar-powered repeater", 210, False),
-        ("msg", "me", "me", "I'm on the same settings, you should see my announces", 300, True),
-        ("msg", "mira", "m", "Found you! 3 hops away 🎉", 380, False),
-        ("msg", "ole", "o", "Let's collect coverage reports in #mapping", 460, False),
-        ("msg", "me", "me", "Great idea, I'll post mine tonight.", 520, True),
-    ]
-    return [{"kind": k, "nick": n, "src": s, "text": txt, "timestamp": t + dt, "is_me": me}
-            for k, n, s, txt, dt, me in rows]
-
-
-RELAY_MEMBERS = [{"nick": n, "hash": h(30 + i)} for i, n in enumerate(["mira", "ole", "kai", "me"])]
-
 ANNOUNCES = [
     dict(destination_hash=h(40), display_name="Frieda", hops=2, receiving_interface="RNodeInterface[LoRa 868]"),
     dict(destination_hash=h(41), display_name="Hackerspace Node", hops=1, receiving_interface="TCPInterface[Hub]"),
@@ -212,17 +190,6 @@ class DemoService:
 
     def get_announces(self, query=None):
         return ANNOUNCES
-
-    def get_rrc_hubs(self):
-        return [{"hash": HUB, "name": HUB_NAME, "is_connected": True, "status_text": "Verbunden",
-                 "rooms": ["#general", "#lora", "#mapping"], "unread_rooms": ["#mapping"],
-                 "motd": "Welcome to the community hub! Be nice."}]
-
-    def get_rrc_messages(self, hub, room):
-        return relay_messages()
-
-    def get_rrc_members(self, hub, room):
-        return RELAY_MEMBERS
 
 
 # --------------------------------------------------------------------------- rendering helpers
@@ -314,15 +281,10 @@ class ShotApp(retchat_app.RetchatApp):
         win.conv_list_box.select_row(win.conv_rows[dest])
         pump(5000)  # also lets the overlay scroll indicator fade out
 
-    def open_relay_room(self, win, room):
+    def show_discover(self, win):
         win.sidebar_stack.set_transition_type(Gtk.StackTransitionType.NONE)
-        win.sidebar_stack.set_visible_child_name("relay")
-        pump(800)
-        win.open_relay_room(HUB, room)
-        for (hub, name), row in win.relay_channel_rows.items():
-            if name == room:
-                win.relay_list_box.select_row(row)
-        pump(3000)
+        win.sidebar_stack.set_visible_child_name("discover")
+        pump(1500)
 
     def save(self, name, *surfaces):
         path = os.path.join(HERE, name)
@@ -338,8 +300,9 @@ class ShotApp(retchat_app.RetchatApp):
         win.destroy()
 
         win = self.new_window(1040, 700, dark=True)
-        self.open_relay_room(win, "#lora")
-        self.save("desktop-relay-dark.png", snapshot(win))
+        self.select_chat(win, ALICE)
+        self.show_discover(win)
+        self.save("desktop-dark.png", snapshot(win))
         win.destroy()
 
         phone_list = self.new_window(360, 740)

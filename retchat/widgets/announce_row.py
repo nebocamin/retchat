@@ -1,6 +1,5 @@
 """Row widget for discovered mesh peers (Announces)."""
 
-import datetime
 from typing import Any, Dict
 
 import gi
@@ -35,8 +34,9 @@ class AnnounceRow(Gtk.ListBoxRow):
         self.suffix_box.append(self.hops_label)
 
         # Start Chat button
-        # Window action instead of a Python handler: a handler referencing the
-        # row would keep every removed row alive (see RelayHubRow).
+        # Window action instead of a Python handler: a handler on a child widget
+        # that references the row forms a cycle through GTK that Python's garbage
+        # collector can't break, so every removed row would stay alive.
         self.chat_btn = Gtk.Button(icon_name="mail-message-new-symbolic",
                                    action_name="win.announce-start-chat",
                                    action_target=GLib.Variant.new_string(self.dest_hash))

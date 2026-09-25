@@ -1,6 +1,6 @@
-"""Scrollable message history shared by the direct chat and relay chat views."""
+"""Scrollable message history that keeps the newest message in view."""
 
-from typing import Callable, Optional, Sequence
+from typing import Callable, Sequence
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -33,13 +33,9 @@ class ChatHistory(Adw.Bin):
     otherwise a new row arriving in the same frame would clear the sticky state.
     """
 
-    def __init__(self, item_type: GObject.GType, create_row: Callable[[], Gtk.Widget],
-                 max_items: Optional[int] = None):
-        """``max_items`` bounds the list for endless streams (relay rooms): while
-        the view is at the bottom, the oldest items beyond it are dropped."""
+    def __init__(self, item_type: GObject.GType, create_row: Callable[[], Gtk.Widget]):
         super().__init__(hexpand=True, vexpand=True)
         self._create_row = create_row
-        self._max_items = max_items
         self._stick_to_bottom = True
         self._rescroll_source = 0
 
@@ -103,15 +99,7 @@ class ChatHistory(Adw.Bin):
         """
         self.store.append(item)
         if self._stick_to_bottom:
-            self._trim()
             self.scroll_to_bottom()
-
-    def _trim(self):
-        # Only called while at the bottom, so removing rows above the view
-        # can't move what the user is reading.
-        excess = self.store.get_n_items() - (self._max_items or 0)
-        if self._max_items and excess > 0:
-            self.store.splice(0, excess, [])
 
     def scroll_to_bottom(self):
         self._stick_to_bottom = True

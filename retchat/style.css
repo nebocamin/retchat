@@ -102,37 +102,6 @@ listview.chat-history > row {
 }
 
 /* ---------------------------------------------------------------------------
- * Relay chat view (RelayMessageRow, hub overview)
- * ------------------------------------------------------------------------- */
-
-.relay-nick {
-    font-size: 0.85em;
-    font-weight: bold;
-}
-
-.relay-notice {
-    margin: 4px 24px;
-    font-size: 0.85em;
-    opacity: 0.6;
-}
-
-.relay-action {
-    margin: 2px 12px;
-}
-
-.hub-overview {
-    margin: 24px 16px;
-}
-
-.motd-card {
-    padding: 12px 16px;
-}
-
-.members-popover {
-    margin: 6px;
-}
-
-/* ---------------------------------------------------------------------------
  * Sidebar
  * ------------------------------------------------------------------------- */
 
@@ -153,7 +122,7 @@ listview.chat-history > row {
     color: @accent_color;
 }
 
-/* Compact segmented switcher for sidebar tabs (Chats / Entdecken / Relay) */
+/* Compact segmented switcher for sidebar tabs (Chats / Entdecken) */
 .compact-switcher,
 stackswitcher {
     margin-left: 6px;

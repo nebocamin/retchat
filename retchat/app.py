@@ -70,7 +70,7 @@ class RetchatApp(Adw.Application):
             application_icon=APP_ID,
             version=VERSION,
             developer_name="stereo",
-            comments="Dezentraler, Ende-zu-Ende-verschlüsselter Chat über das Reticulum-Mesh-Netzwerk (LXMF und Relay Chat).",
+            comments="Dezentraler, Ende-zu-Ende-verschlüsselter Chat über das Reticulum-Mesh-Netzwerk (LXMF).",
             website="https://github.com/nebocamin/retchat",
             issue_url="https://github.com/nebocamin/retchat/issues",
             license_type=Gtk.License.GPL_3_0,

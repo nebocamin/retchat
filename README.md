@@ -16,7 +16,7 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   <img src="data/screenshots/mobile.png" alt="Chat list, conversation and discover tab on a phone">
 </p>
 
-![Relay chat channel in dark style](data/screenshots/desktop-relay-dark.png)
+![Dark style with the discover tab](data/screenshots/desktop-dark.png)
 
 <sub>Screenshots use dummy data and are generated with `data/screenshots/generate_screenshots.py`.</sub>
 
@@ -29,10 +29,6 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   - Send and receive images, with a built-in image viewer.
   - Rename contacts, copy their address, request a path through the mesh.
   - Delete chats from the chat menu, or by right click / long press in the chat list.
-- **Relay chat (RRC)**
-  - Group chat in channels on Reticulum Relay Chat hubs.
-  - Hub overview with message of the day, joined channels and member list.
-  - `/me` actions and join/part notices.
 - **Discover peers on the mesh**
   - The *Entdecken* (discover) tab lists `lxmf.delivery` announces with display name, address and hop count.
   - Start a chat with a single click.
@@ -131,7 +127,7 @@ retchat/
 └── retchat/
     ├── app.py                         # Adw.Application: lifecycle, CSS, icons, about dialog
     ├── window.py                      # Main window (split view, breakpoints, menus, actions)
-    ├── models.py                      # GObject models for messages (MessageItem, RelayMessageItem)
+    ├── models.py                      # GObject model for messages (MessageItem)
     ├── database.py                    # SQLite store for custom names and settings
     ├── reticulum_service.py           # Reticulum / LXMF / NomadNet service and callbacks
     ├── style.css                      # Libadwaita CSS (bubbles, badges, composer)
@@ -139,17 +135,12 @@ retchat/
     │   ├── chat_history.py            # Gtk.ListView history that keeps the newest message in view
     │   ├── chat_view.py               # Direct chat: history and composer
     │   ├── message_bubble.py          # Message bubble with image and delivery status
-    │   ├── relay_chat_view.py         # Relay chat: rooms and hub overview
-    │   ├── relay_message_row.py       # Relay message, /me action or notice
     │   ├── conversation_row.py        # Row in the chat list
-    │   ├── announce_row.py            # Row in the discover list
-    │   └── relay_room_row.py          # Hub and channel rows in the relay list
+    │   └── announce_row.py            # Row in the discover list
     └── dialogs/
         ├── new_chat_dialog.py         # New chat (address input with validation)
         ├── profile_dialog.py          # Own profile and announce
         ├── interfaces_dialog.py       # Reticulum interfaces, TCP hub, propagation node
-        ├── add_relay_dialog.py        # Add a relay hub
-        ├── join_channel_dialog.py     # Join a relay channel
         └── image_viewer_dialog.py     # Image viewer
 ```
 
