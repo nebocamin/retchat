@@ -13,6 +13,10 @@ from retchat.widgets.chat_history import CONTENT_MAX_WIDTH, ChatHistory
 from retchat.widgets.relay_message_row import RelayMessageRow, get_nick_color
 
 
+# Same as NomadNet's default history cap per room (rrc_history_per_room_cap).
+MAX_ROOM_MESSAGES = 500
+
+
 class RelayChatView(Adw.Bin):
     """Shows either a relay room (chat) or a hub overview.
 
@@ -40,9 +44,10 @@ class RelayChatView(Adw.Bin):
         self.current_hub_hash: Optional[str] = None
         self.current_room: Optional[str] = None
         self.current_hub_name: str = ""
-        self._displayed_keys: set = set()
+        # Recent dedup keys in insertion order (dict as ordered set), bounded like the room.
+        self._displayed_keys: Dict[tuple, None] = {}
 
-        self.history = ChatHistory(RelayMessageItem, RelayMessageRow)
+        self.history = ChatHistory(RelayMessageItem, RelayMessageRow, max_items=MAX_ROOM_MESSAGES)
 
         self.view_stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.CROSSFADE)
         self.view_stack.add_named(self._build_room_view(), "room_chat")
@@ -188,7 +193,7 @@ class RelayChatView(Adw.Bin):
         for msg in messages:
             item = RelayMessageItem(msg)
             if item.dedup_key not in self._displayed_keys:
-                self._displayed_keys.add(item.dedup_key)
+                self._remember(item.dedup_key)
                 items.append(item)
 
         self.view_stack.set_visible_child_name("room_chat")
@@ -276,10 +281,15 @@ class RelayChatView(Adw.Bin):
         item = RelayMessageItem(msg_data)
         if item.dedup_key in self._displayed_keys:
             return
-        self._displayed_keys.add(item.dedup_key)
+        self._remember(item.dedup_key)
         self.history.append(item)
 
     # --- Internals ------------------------------------------------------------
+
+    def _remember(self, key: tuple):
+        self._displayed_keys[key] = None
+        while len(self._displayed_keys) > MAX_ROOM_MESSAGES:
+            del self._displayed_keys[next(iter(self._displayed_keys))]
 
     def _send(self):
         text = self.entry.get_text().strip()
