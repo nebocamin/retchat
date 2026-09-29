@@ -11,6 +11,7 @@ gi.require_version('GdkPixbuf', '2.0')
 from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
 
 from retchat.models import MessageItem
+from retchat.nomadnet_pages import find_urls
 from retchat.widgets.attachment_row import AttachmentRow
 from retchat.reticulum_service import STATE_DELIVERED, STATE_FAILED, STATE_SENDING, STATE_SENT
 
@@ -49,23 +50,84 @@ def _thumbnail_size(texture: Gdk.Texture) -> tuple[int, int]:
     return max(THUMB_MIN_WIDTH, int(w * scale)), max(THUMB_MIN_HEIGHT, int(h * scale))
 
 
+def linkify(text: str) -> Optional[str]:
+    """Pango markup with clickable nomadnetwork:// links, None if there are none."""
+    urls = find_urls(text)
+    if not urls:
+        return None
+    out, pos = [], 0
+    for start, end, url in urls:
+        out.append(GLib.markup_escape_text(text[pos:start]))
+        escaped = GLib.markup_escape_text(url).replace('"', "&quot;")
+        out.append(f'<a href="{escaped}" title="NomadNet-Seite öffnen">{GLib.markup_escape_text(url)}</a>')
+        pos = end
+    out.append(GLib.markup_escape_text(text[pos:]))
+    return "".join(out)
+
+
+def can_react(item: MessageItem) -> bool:
+    """Reactions are possible on received messages with a real LXMF hash."""
+    return not item.is_outgoing and len(item.message_hash) == 64
+
+
 class MessageBubble(Gtk.Box):
     """A chat bubble that can be re-bound to different MessageItems.
 
     The widget tree is built once; ``bind()`` fills it with the data of an item
     and ``unbind()`` releases it again, so Gtk.ListView can recycle rows.
+
+    Received messages can be reacted to via the smiley button next to the
+    bubble (shown on hover), a right click or a long press on the bubble;
+    these call ``on_react_requested(item, widget, x, y)`` to open the picker
+    pointing at (x, y) in ``widget``. Reaction chips below the bubble react
+    with the same emoji through the ``chat.react`` action.
     """
 
-    def __init__(self, on_image_clicked: Optional[Callable[[MessageItem], None]] = None):
-        super().__init__()
+    def __init__(
+        self,
+        on_image_clicked: Optional[Callable[[MessageItem], None]] = None,
+        on_react_requested: Optional[Callable[[MessageItem, Gtk.Widget, float, float], None]] = None,
+        peer_name: Optional[Callable[[], str]] = None,
+    ):
+        super().__init__(spacing=4)
         self.add_css_class("message-row")
         self._on_image_clicked = on_image_clicked
+        self._on_react_requested = on_react_requested
+        self._peer_name = peer_name
         self._item: Optional[MessageItem] = None
         self._state_handler = 0
+        self._reactions_handler = 0
+
+        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.append(column)
 
         self.bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.bubble.add_css_class("message-bubble")
-        self.append(self.bubble)
+        column.append(self.bubble)
+
+        # Reaction chips, overlapping the lower edge of the bubble
+        self.reactions_box = Gtk.Box(spacing=4, visible=False)
+        self.reactions_box.add_css_class("message-reactions")
+        column.append(self.reactions_box)
+
+        self.react_btn = Gtk.Button(icon_name="face-smile-symbolic", tooltip_text="Reagieren",
+                                    valign=Gtk.Align.CENTER)
+        for css in ("flat", "circular", "react-button"):
+            self.react_btn.add_css_class(css)
+        self.react_btn.connect("clicked", self._on_react_clicked)
+        self.append(self.react_btn)
+
+        # Right click (mouse) or long press (touch) on a received message opens
+        # the reaction picker. Capture phase: the text label would otherwise
+        # show its own context menu or start a selection.
+        right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        right_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        right_click.connect("pressed", lambda g, _n, x, y: self._on_react_gesture(g, x, y))
+        self.bubble.add_controller(right_click)
+        long_press = Gtk.GestureLongPress(touch_only=True)
+        long_press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        long_press.connect("pressed", self._on_react_gesture)
+        self.bubble.add_controller(long_press)
 
         # Image attachment
         self.picture = Gtk.Picture(content_fit=Gtk.ContentFit.COVER, can_shrink=True)
@@ -96,6 +158,7 @@ class MessageBubble(Gtk.Box):
             xalign=0.0,
         )
         self.label.add_css_class("message-text")
+        self.label.connect("activate-link", self._on_activate_link)
         self.bubble.append(self.label)
 
         # Footer: time, hops, delivery state
@@ -122,6 +185,9 @@ class MessageBubble(Gtk.Box):
 
         outgoing = item.is_outgoing
         self.set_halign(Gtk.Align.END if outgoing else Gtk.Align.START)
+        self.set_css_classes(["message-row", "outgoing" if outgoing else "incoming"])
+        self.reactions_box.set_halign(Gtk.Align.END if outgoing else Gtk.Align.START)
+        self.react_btn.set_visible(can_react(item))
 
         self._bind_image(item)
         has_image = self.picture.get_visible() or self.image_error.get_visible()
@@ -135,7 +201,11 @@ class MessageBubble(Gtk.Box):
         self.bubble.set_css_classes(classes)
 
         text = item.content or ("" if has_image or item.files else "[Leere Nachricht]")
-        self.label.set_text(text)
+        markup = linkify(text)
+        if markup is None:
+            self.label.set_text(text)  # also turns markup parsing off again
+        else:
+            self.label.set_markup(markup)
         self.label.set_visible(bool(text))
 
         time_str = self._format_time(item.timestamp)
@@ -145,15 +215,57 @@ class MessageBubble(Gtk.Box):
 
         self._state_handler = item.connect("notify::state", lambda *_: self._update_state())
         self._update_state()
+        self._reactions_handler = item.connect("notify::reactions", lambda *_: self._update_reactions())
+        self._update_reactions()
 
     def unbind(self):
-        if self._item is not None and self._state_handler:
-            self._item.disconnect(self._state_handler)
+        if self._item is not None:
+            for handler in (self._state_handler, self._reactions_handler):
+                if handler:
+                    self._item.disconnect(handler)
         self._item = None
         self._state_handler = 0
+        self._reactions_handler = 0
         self.picture.set_paintable(None)
         while child := self.files_box.get_first_child():
             self.files_box.remove(child)
+        self._clear_reactions()
+
+    def _clear_reactions(self):
+        while child := self.reactions_box.get_first_child():
+            self.reactions_box.remove(child)
+
+    def _update_reactions(self):
+        self._clear_reactions()
+        item = self._item
+        reactions = (item.reactions or []) if item is not None else []
+        self.reactions_box.set_visible(bool(reactions))
+        if item is None:
+            return
+        reactable = can_react(item)
+        for r in reactions:
+            count = int(r.get("count") or 1)
+            chip = Gtk.Button(label=r["emoji"] if count < 2 else f"{r['emoji']} {count}")
+            chip.add_css_class("reaction-chip")
+            if r.get("mine"):
+                chip.add_css_class("mine")
+            chip.set_tooltip_text(self._reaction_tooltip(r["emoji"], count, bool(r.get("mine"))))
+            if reactable and not r.get("mine"):
+                # Tap an emoji to react with it as well (action: no Python
+                # reference from the chip back to this row).
+                chip.set_action_name("chat.react")
+                chip.set_action_target_value(GLib.Variant("(ss)", (item.message_hash, r["emoji"])))
+            else:
+                chip.set_can_target(False)
+            self.reactions_box.append(chip)
+
+    def _reaction_tooltip(self, emoji: str, count: int, mine: bool) -> str:
+        peer = (self._peer_name() if self._peer_name else "") or "Kontakt"
+        if mine:
+            who = f"Du und {peer}" if count > 1 else "Du"
+        else:
+            who = peer
+        return f"{who} {'hast' if who == 'Du' else 'hat' if count == 1 else 'haben'} mit {emoji} reagiert"
 
     def _bind_image(self, item: MessageItem):
         path = item.image_path
@@ -208,6 +320,22 @@ class MessageBubble(Gtk.Box):
     def _on_picture_released(self, _gesture, _n_press, _x, _y):
         if self._item is not None and self._on_image_clicked:
             self._on_image_clicked(self._item)
+
+    def _on_activate_link(self, _label: Gtk.Label, uri: str) -> bool:
+        # A window action: rows are recycled and must not reference the window.
+        self.activate_action("win.open-nomadnet-url", GLib.Variant.new_string(uri))
+        return True
+
+    def _on_react_clicked(self, button: Gtk.Button):
+        if self._item is not None and self._on_react_requested:
+            self._on_react_requested(self._item, button, button.get_width() / 2, button.get_height() / 2)
+
+    def _on_react_gesture(self, gesture: Gtk.Gesture, x: float, y: float):
+        item = self._item
+        if item is None or not can_react(item) or not self._on_react_requested:
+            return  # own message: keep the text label's context menu
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self._on_react_requested(item, self.bubble, x, y)
 
     @staticmethod
     def _format_time(timestamp: float) -> str:

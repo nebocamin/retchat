@@ -8,11 +8,14 @@ from gi.repository import GObject
 class MessageItem(GObject.Object):
     """A single chat message, stored in a Gio.ListStore and bound to a MessageBubble.
 
-    Only ``state`` changes during the lifetime of a message; bubbles listen to
-    ``notify::state`` to update the delivery indicator.
+    Only ``state`` and ``reactions`` change during the lifetime of a message;
+    bubbles listen to ``notify::state`` and ``notify::reactions``.
 
     ``files`` lists attachments other than the inline image as
     ``{"path", "name", "size"}`` dicts (a plain attribute, it never changes).
+
+    ``reactions`` is a list of ``{"emoji", "count", "mine"}`` dicts; assign a
+    new list to change it (changing the list in place doesn't notify).
     """
 
     __gtype_name__ = "RetchatMessageItem"
@@ -26,6 +29,7 @@ class MessageItem(GObject.Object):
     image_path = GObject.Property(type=str, default=None)
     image_name = GObject.Property(type=str, default=None)
     image_size = GObject.Property(type=GObject.TYPE_INT64, default=-1)
+    reactions = GObject.Property(type=object)
 
     def __init__(self, data: Dict[str, Any]):
         super().__init__(
@@ -38,6 +42,7 @@ class MessageItem(GObject.Object):
             image_path=data.get("image_path"),
             image_name=data.get("image_name"),
             image_size=int(data["image_size"]) if data.get("image_size") is not None else -1,
+            reactions=list(data.get("reactions") or []),
         )
         self.files: List[Dict[str, Any]] = list(data.get("files") or [])
 

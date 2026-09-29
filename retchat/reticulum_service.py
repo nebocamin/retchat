@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import gi
@@ -20,6 +21,7 @@ from nomadnet.Conversation import ConversationMessage
 import RNS
 
 from retchat.database import Database
+from retchat.nomadnet_pages import PageFetcher
 
 # Message states mapped for UI
 STATE_SENDING = 0
@@ -77,6 +79,103 @@ def _check_attachment_size(size: int):
 # Truncated destination hash (16 bytes) and full LXMF message hash (32 bytes) as hex
 _HEX_DEST_RE = re.compile(r"[0-9a-f]{32}")
 _HEX_MSG_RE = re.compile(r"[0-9a-f]{64}")
+
+
+# --- Reactions ------------------------------------------------------------------
+#
+# A reaction is a separate LXMF message without text, carrying
+#   fields[FIELD_REACTION] = {REACTION_TO: <target LXMessage.hash>,
+#                             REACTION_CONTENT: <emoji, UTF-8>}
+# (LXMF standard, also sent by Columba and MeshChatX). The reacting user is
+# the (signed) source of that message. Reactions can't be withdrawn; every
+# sender has each emoji at most once per message.
+# Older Columba/MeshChatX versions used fields[0x10] = {"reaction_to": hex,
+# "emoji": str, "sender": hex}; it is accepted on receipt, but "sender" is
+# ignored in favour of the authenticated message source.
+FIELD_REACTION = getattr(LXMF, "FIELD_REACTION", 0x40)
+REACTION_TO = getattr(LXMF, "REACTION_TO", 0x00)
+REACTION_CONTENT = getattr(LXMF, "REACTION_CONTENT", 0x01)
+FIELD_REACTION_LEGACY = 0x10
+# An emoji is 1-10 code points (flags, skin tones, ZWJ sequences); allow some
+# room for short text reactions, but nothing that would break the layout.
+MAX_REACTION_LENGTH = 16
+
+
+def _message_hash_hex(value: Any) -> Optional[str]:
+    """A full LXMF message hash (bytes or hex string) as lowercase hex."""
+    if isinstance(value, (bytes, bytearray)):
+        value = bytes(value).hex() if len(value) == 32 else value.decode("ascii", errors="replace")
+    if isinstance(value, str):
+        value = value.strip().lower()
+        if _HEX_MSG_RE.fullmatch(value):
+            return value
+    return None
+
+
+def sanitize_reaction(value: Any) -> Optional[str]:
+    """Reaction content as displayable text, or None if it is unusable."""
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > MAX_REACTION_LENGTH:
+        return None
+    # Control characters and line breaks; format characters (ZWJ, tags of
+    # subdivision flags) and variation selectors are part of emoji.
+    if any(unicodedata.category(c) in ("Cc", "Zl", "Zp", "Cs", "Co", "Cn") for c in value):
+        return None
+    return value
+
+
+def _get_key(d: dict, key: str) -> Any:
+    value = d.get(key)
+    return value if value is not None else d.get(key.encode())
+
+
+def parse_reaction(fields: Any) -> Optional[Tuple[str, Optional[str]]]:
+    """(target message hash, emoji) if ``fields`` mark a reaction message.
+
+    The emoji is None if the target is valid but the content is not; such a
+    message is still a reaction (and not shown as a message), it's just not
+    displayed.
+    """
+    if not isinstance(fields, dict):
+        return None
+    data = fields.get(FIELD_REACTION)
+    if isinstance(data, dict):
+        target = _message_hash_hex(data.get(REACTION_TO))
+        if target:
+            return target, sanitize_reaction(data.get(REACTION_CONTENT))
+    legacy = fields.get(FIELD_REACTION_LEGACY)
+    if isinstance(legacy, dict):
+        target = _message_hash_hex(_get_key(legacy, "reaction_to"))
+        if target:
+            return target, sanitize_reaction(_get_key(legacy, "emoji"))
+    return None
+
+
+def reaction_fields(target_hash: str, emoji: str) -> Dict[int, Any]:
+    return {FIELD_REACTION: {REACTION_TO: bytes.fromhex(target_hash), REACTION_CONTENT: emoji.encode("utf-8")}}
+
+
+def summarize_reactions(rows: List[Dict[str, Any]], own_hash: str) -> Dict[str, List[Dict[str, Any]]]:
+    """Reaction rows (oldest first) grouped per target message.
+
+    Returns {target_hash: [{"emoji", "count", "mine"}]} in the order the
+    emoji were first used; every sender counts once per emoji.
+    """
+    senders: Dict[str, Dict[str, set]] = {}
+    for row in rows:
+        per_emoji = senders.setdefault(row["target_hash"], {})
+        per_emoji.setdefault(row["emoji"], set()).add(row["sender_hash"])
+    return {
+        target: [{"emoji": emoji, "count": len(s), "mine": own_hash in s} for emoji, s in per_emoji.items()]
+        for target, per_emoji in senders.items()
+    }
 
 
 def map_lxmf_state_to_ui(lxmf_state: int, is_outgoing: bool = False) -> int:
@@ -166,9 +265,25 @@ class _RetchatApp(nomadnet.NomadNetworkApp):
         super().__init__(configdir=configdir, rnsconfigdir=rnsconfigdir, daemon=True)
 
     def lxmf_delivery(self, message):
-        super().lxmf_delivery(message)
+        # Reactions are registered before NomadNet stores them, so a chat
+        # list refresh triggered by the storing already hides them.
+        reaction = None
         try:
-            self._service._on_inbound_lxmessage(message)
+            reaction = self._service._register_inbound_reaction(message)
+        except Exception as e:
+            RNS.log(f"Retchat: Error handling reaction: {e}", RNS.LOG_ERROR)
+        unread_before = Conversation.unread_conversations.get(message.source_hash)
+
+        super().lxmf_delivery(message)
+
+        try:
+            if reaction is not None:
+                # NomadNet counts every stored message as unread; a reaction
+                # adds no message to the chat, so keep the previous count.
+                self._service._restore_unread(message.source_hash, unread_before)
+                self._service._on_inbound_reaction(message, *reaction)
+            else:
+                self._service._on_inbound_lxmessage(message)
         except Exception as e:
             RNS.log(f"Retchat: Error in lxmf_delivery handler: {e}", RNS.LOG_ERROR)
 
@@ -186,6 +301,15 @@ class ReticulumService:
         self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._path_resolved_callbacks: List[Callable[[str, int], None]] = []
         self._conversations_changed_callbacks: List[Callable[[], None]] = []
+        self._reaction_callbacks: List[Callable[[str, str, List[Dict[str, Any]]], None]] = []
+
+        # Hashes of reaction messages, hidden in the chat (see _is_reaction_message).
+        self._reaction_hashes: set = self.db.get_reaction_hashes()
+        # Messages without text and attachments that were checked and aren't reactions.
+        self._plain_empty_hashes: set = set()
+        # Names of NomadNet nodes from their announces (hex hash -> name)
+        self._node_names: Dict[str, str] = {}
+        self._page_fetcher: Optional[PageFetcher] = None
 
         # Ensure ~/.reticulum/config has TCP enabled as default, and enable_transport=False
         self._ensure_tcp_default_config()
@@ -408,10 +532,13 @@ class ReticulumService:
                 "destination_hash": dest_hex,
                 "display_name": name,
                 "hops": hops,
+                "kind": kind,
                 "aspect": f"nomadnet.{kind}",
                 "receiving_interface": "",
                 "last_seen": time.time()
             }
+            if kind == "node" and name:
+                self._node_names[dest_hex] = name
             GLib.idle_add(self._notify_announce, data)
         except Exception as e:
             RNS.log(f"Retchat: Error dispatching announce: {e}", RNS.LOG_DEBUG)
@@ -493,9 +620,13 @@ class ReticulumService:
                 last_text = ""
                 last_time = activity if activity else 0.0
 
-                if conv.messages:
-                    sorted_msgs = sorted(conv.messages, key=lambda m: m.sort_timestamp)
-                    last_m = sorted_msgs[-1]
+                last_m = None
+                for m in sorted(conv.messages, key=lambda m: m.sort_timestamp, reverse=True):
+                    if not self._is_reaction_message(m, source_hash):
+                        last_m = m
+                        break
+                    _release(m)
+                if last_m is not None:
                     try:
                         last_text = (last_m.get_content() or "").strip()
                     except Exception:
@@ -790,6 +921,8 @@ class ReticulumService:
         # without reading every message file again.
         for m in sorted_msgs:
             try:
+                if self._is_reaction_message(m, dest_hex):
+                    continue
                 content = (m.get_content() or "").strip()
                 title = m.get_title() or ""
                 ts = m.get_timestamp() or m.sort_timestamp
@@ -821,7 +954,140 @@ class ReticulumService:
             finally:
                 _release(m)
 
+        reactions = summarize_reactions(self.db.get_reactions(dest_hex), own_hash)
+        for msg in out:
+            msg["reactions"] = reactions.get(msg["message_hash"], [])
         return out
+
+    # --- Reactions ---------------------------------------------------------------
+
+    def get_reactions(self, dest_hex: str, message_hash: str) -> List[Dict[str, Any]]:
+        """Reactions of one message: [{"emoji", "count", "mine"}]."""
+        dest_hex = dest_hex.strip().lower()
+        rows = self.db.get_reactions(dest_hex, message_hash)
+        return summarize_reactions(rows, self.delivery_destination_hex.lower()).get(message_hash.lower(), [])
+
+    def send_reaction(self, dest_hex: str, message_hash: str, emoji: str) -> List[Dict[str, Any]]:
+        """React to a received message; returns the message's reactions afterwards.
+
+        Reacting twice with the same emoji sends nothing (reactions can't
+        be withdrawn, so there is nothing to toggle).
+        """
+        dest_hex = dest_hex.strip().lower()
+        message_hash = message_hash.strip().lower()
+        if not _HEX_DEST_RE.fullmatch(dest_hex):
+            raise ValueError("Ungültige Zieladresse")
+        if not _HEX_MSG_RE.fullmatch(message_hash):
+            raise ValueError("Auf diese Nachricht kann nicht reagiert werden")
+        clean = sanitize_reaction(emoji)
+        if clean is None:
+            raise ValueError("Ungültige Reaktion")
+
+        own_hash = self.delivery_destination_hex.lower()
+        if self.db.has_reaction(dest_hex, message_hash, own_hash, clean):
+            return self.get_reactions(dest_hex, message_hash)
+        if not self.peer_known(dest_hex):
+            Conversation.query_for_peer(dest_hex)
+            raise ValueError("Kontakt ist noch nicht bekannt, bitte später erneut versuchen")
+
+        conv = self.conversation(dest_hex)
+        if not conv.send(content="", fields=reaction_fields(message_hash, clean)) or not conv.messages:
+            raise ValueError("Reaktion konnte nicht gesendet werden")
+        sent_m = conv.messages[-1]
+        reaction_hash = sent_m.get_hash().hex() if sent_m.get_hash() else f"local_{os.urandom(16).hex()}"
+        _release(sent_m)
+
+        self._reaction_hashes.add(reaction_hash)
+        self.db.add_reaction(reaction_hash, dest_hex, message_hash, own_hash, clean, time.time())
+        return self.get_reactions(dest_hex, message_hash)
+
+    def _is_reaction_message(self, m: ConversationMessage, conversation_hash: str) -> bool:
+        """Whether a stored message is a reaction (hidden in chat and preview).
+
+        Reactions received while Retchat runs are registered on receipt.
+        Others (received before Retchat supported them) have no text and no
+        attachments, so only such messages are read from disk and checked.
+        """
+        h = m.get_hash()
+        msg_hash = h.hex() if h else None
+        if msg_hash is None or msg_hash in self._plain_empty_hashes:
+            return False
+        if msg_hash in self._reaction_hashes:
+            return True
+        try:
+            if (m.get_content() or "").strip() or m.has_attachments():
+                return False
+            parsed = parse_reaction(m.get_fields())
+        except Exception:
+            return False
+        if parsed is None:
+            self._plain_empty_hashes.add(msg_hash)
+            return False
+
+        target, emoji = parsed
+        src = _source_hash(m)
+        sender = src.hex().lower() if src else conversation_hash
+        self._reaction_hashes.add(msg_hash)
+        self.db.add_reaction(msg_hash, conversation_hash, target, sender, emoji or "",
+                             m.get_timestamp() or m.sort_timestamp)
+        return True
+
+    def _register_inbound_reaction(self, message: LXMF.LXMessage) -> Optional[Tuple[str, Optional[str]]]:
+        """Store a received reaction message; (target hash, emoji) or None (Reticulum thread)."""
+        parsed = parse_reaction(message.fields)
+        if parsed is None or message.hash is None:
+            return None
+        target, emoji = parsed
+        source_hash = message.source_hash.hex().lower()
+        msg_hash = message.hash.hex()
+        self._reaction_hashes.add(msg_hash)
+        self.db.add_reaction(msg_hash, source_hash, target, source_hash, emoji or "",
+                             message.timestamp or time.time())
+        return parsed
+
+    def _restore_unread(self, source_hash: bytes, unread_before: Optional[int]):
+        """Reset NomadNet's unread counter of a conversation to ``unread_before``."""
+        if unread_before is None:
+            # mark_conversation_read would also drop the failed marker
+            Conversation.unread_conversations.pop(source_hash, None)
+            path = os.path.join(self.app.conversationpath, source_hash.hex(), "unread")
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        else:
+            Conversation.unread_conversations[source_hash] = unread_before
+            try:
+                with open(os.path.join(self.app.conversationpath, source_hash.hex(), "unread"), "w") as f:
+                    f.write(str(unread_before))
+            except OSError:
+                pass
+
+    def _on_inbound_reaction(self, message: LXMF.LXMessage, target_hash: str, emoji: Optional[str]):
+        """A reaction was received and stored (Reticulum thread)."""
+        if emoji is not None:
+            # Conversations are read and rescanned on the main loop only.
+            GLib.idle_add(self._announce_reaction, message.source_hash.hex().lower(), target_hash, emoji)
+
+    def _announce_reaction(self, source_hash: str, target_hash: str, emoji: str) -> bool:
+        preview = self._message_preview(source_hash, target_hash)
+        self._trigger_notification(source_hash, f"{emoji} zu: {preview or 'deiner Nachricht'}",
+                                   title_prefix="Reaktion von")
+        self._notify_reaction(source_hash, target_hash, self.get_reactions(source_hash, target_hash))
+        return False
+
+    def _message_preview(self, conversation_hash: str, message_hash: str) -> str:
+        conv = self.conversation(conversation_hash)
+        for m in conv.messages:
+            h = m.get_hash()
+            if h and h.hex() == message_hash:
+                try:
+                    return (m.get_content() or "").strip()
+                except Exception:
+                    return ""
+                finally:
+                    _release(m)
+        return ""
 
     def send_message(self, dest_hex: str, content: str, attachment_path: Optional[str] = None) -> Dict[str, Any]:
         """Send a message, optionally with an image or any other file (see _prepare_attachment)."""
@@ -925,7 +1191,10 @@ class ReticulumService:
 
     # --- Announces & Path Finding ---
     def get_announces(self, query: Optional[str] = None) -> List[Dict[str, Any]]:
-        stream = getattr(self.app.directory, "announce_stream", [])
+        # NomadNet's stream is its node, peer and propagation node lists after
+        # each other; show the newest first.
+        stream = sorted(getattr(self.app.directory, "announce_stream", []),
+                        key=lambda item: item[0] or 0, reverse=True)
         seen = set()
         results = []
         q = query.strip().lower() if query else None
@@ -935,7 +1204,9 @@ class ReticulumService:
                 timestamp, source_hash, app_data, kind = item[:4]
                 dest_hex = source_hash.hex() if isinstance(source_hash, bytes) else str(source_hash).lower()
 
-                if dest_hex in seen:
+                # Propagation nodes (store-and-forward servers) are neither
+                # contacts nor pages; their app data is binary.
+                if kind not in ("peer", "node") or dest_hex in seen:
                     continue
                 seen.add(dest_hex)
 
@@ -961,10 +1232,13 @@ class ReticulumService:
                     if not (match_hex or match_name):
                         continue
 
+                if kind == "node" and display_name:
+                    self._node_names[dest_hex] = display_name
                 results.append({
                     "destination_hash": dest_hex,
                     "display_name": display_name,
                     "hops": hops,
+                    "kind": kind,
                     "aspect": f"nomadnet.{kind}",
                     "receiving_interface": "",
                     "last_seen": timestamp
@@ -973,6 +1247,68 @@ class ReticulumService:
                 RNS.log(f"Retchat: Error parsing announce stream item: {e}", RNS.LOG_DEBUG)
 
         return results
+
+    # --- NomadNet nodes (pages) -------------------------------------------------------
+
+    @property
+    def page_fetcher(self) -> PageFetcher:
+        if self._page_fetcher is None:
+            self._page_fetcher = PageFetcher(self.app, GLib.idle_add)
+        return self._page_fetcher
+
+    @staticmethod
+    def _identity_hash_for(dest_hex: str, aspect: str) -> Optional[str]:
+        """Hash of the ``aspect`` destination with the same identity as ``dest_hex``."""
+        try:
+            identity = RNS.Identity.recall(bytes.fromhex(dest_hex))
+        except ValueError:
+            return None
+        if identity is None:
+            return None
+        return RNS.Destination.hash_from_name_and_identity(aspect, identity).hex()
+
+    def is_node(self, dest_hex: str) -> bool:
+        """Whether ``dest_hex`` is a NomadNet node (serves pages) rather than a contact."""
+        dest_hex = dest_hex.strip().lower()
+        if dest_hex in self._node_names:
+            return True
+        return self._identity_hash_for(dest_hex, "nomadnetwork.node") == dest_hex
+
+    def node_name(self, dest_hex: str) -> Optional[str]:
+        """Name of a node from its announce (also one heard in an earlier session)."""
+        dest_hex = dest_hex.strip().lower()
+        name = self._node_names.get(dest_hex)
+        if name is None:
+            try:
+                # Nodes announce their name as plain UTF-8; RNS keeps the last app data.
+                app_data = RNS.Identity.recall_app_data(bytes.fromhex(dest_hex))
+                if app_data:
+                    name = app_data.decode("utf-8", errors="replace").strip() or None
+            except Exception:
+                name = None
+            if name:
+                self._node_names[dest_hex] = name
+        return name
+
+    @property
+    def own_node_hex(self) -> Optional[str]:
+        node = getattr(self.app, "node", None)
+        return node.destination.hash.hex() if node is not None else None
+
+    def operator_address(self, node_hex: str) -> Optional[str]:
+        """LXMF address of the operator of a node (both belong to the same identity)."""
+        return self._identity_hash_for(node_hex.strip().lower(), "lxmf.delivery")
+
+    def chat_address(self, dest_hex: str) -> str:
+        """Address to chat with: a node's operator instead of the node itself.
+
+        A conversation with a node hash would send to the operator, but store
+        the messages under a different hash, leaving an empty chat.
+        """
+        dest_hex = dest_hex.strip().lower()
+        if self.is_node(dest_hex):
+            return self.operator_address(dest_hex) or dest_hex
+        return dest_hex
 
     def request_path(
         self,
@@ -1056,7 +1392,7 @@ class ReticulumService:
         except Exception as e:
             RNS.log(f"Retchat: Error handling inbound message: {e}", RNS.LOG_ERROR)
 
-    def _trigger_notification(self, sender_hex: str, preview: str):
+    def _trigger_notification(self, sender_hex: str, preview: str, title_prefix: str = "Nachricht von"):
         try:
             custom_name = self.db.get_custom_name(sender_hex)
             sender_name = custom_name or sender_hex[:8]
@@ -1065,7 +1401,7 @@ class ReticulumService:
                 "notify-send",
                 "-a", "Retchat",
                 "-i", "mail-message-new-symbolic",
-                f"Nachricht von {sender_name}",
+                f"{title_prefix} {sender_name}",
                 preview
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
@@ -1090,6 +1426,18 @@ class ReticulumService:
 
     def add_conversations_changed_callback(self, cb: Callable[[], None]):
         self._conversations_changed_callbacks.append(cb)
+
+    def add_reaction_callback(self, cb: Callable[[str, str, List[Dict[str, Any]]], None]):
+        """cb(conversation_hash, message_hash, reactions): a reaction to a message was received."""
+        self._reaction_callbacks.append(cb)
+
+    def _notify_reaction(self, conversation_hash: str, message_hash: str, reactions: List[Dict[str, Any]]) -> bool:
+        for cb in self._reaction_callbacks:
+            try:
+                cb(conversation_hash, message_hash, reactions)
+            except Exception as e:
+                RNS.log(f"Retchat: Error in reaction callback: {e}", RNS.LOG_ERROR)
+        return False
 
     def _on_conversations_changed_nomadnet(self, *args):
         GLib.idle_add(self._notify_conversations_changed)
@@ -1396,6 +1744,8 @@ class ReticulumService:
     def shutdown(self):
         """Clean shutdown of background threads and NomadNet."""
         self._poll_stop = True
+        if self._page_fetcher is not None:
+            self._page_fetcher.cancel()
         try:
             self.app.exit_handler()
         except Exception as e:

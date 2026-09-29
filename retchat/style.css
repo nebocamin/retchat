@@ -23,15 +23,22 @@ listview.chat-history > row {
     border-radius: 18px;
 }
 
-/* Keep bubbles from spanning the full width, leaving room on the opposite side */
-.message-bubble.outgoing {
+/* Keep bubbles from spanning the full width, leaving room on the opposite side
+ * (for received messages partly taken by the reaction button) */
+.message-row.outgoing {
     margin-left: 48px;
+}
+
+.message-row.incoming {
+    margin-right: 12px;
+}
+
+.message-bubble.outgoing {
     border-bottom-right-radius: 6px;
     background-color: alpha(@accent_bg_color, 0.18);
 }
 
 .message-bubble.incoming {
-    margin-right: 48px;
     border-bottom-left-radius: 6px;
     background-color: @card_bg_color;
     box-shadow: 0 0 0 1px @card_shade_color;
@@ -78,6 +85,59 @@ listview.chat-history > row {
     opacity: 1;
 }
 
+/* Reactions: chips overlapping the lower bubble edge */
+.message-reactions {
+    margin: -6px 10px 0 10px;
+}
+
+.reaction-chip {
+    min-height: 0;
+    min-width: 0;
+    padding: 1px 7px;
+    border-radius: 12px;
+    font-size: 0.9em;
+    background-color: @card_bg_color;
+    box-shadow: 0 0 0 1px @card_shade_color, 0 0 0 3px @window_bg_color;
+}
+
+.reaction-chip:hover {
+    background-image: image(alpha(currentColor, 0.07));
+}
+
+.reaction-chip.mine {
+    background-color: mix(@card_bg_color, @accent_bg_color, 0.2);
+    box-shadow: 0 0 0 1px alpha(@accent_color, 0.5), 0 0 0 3px @window_bg_color;
+}
+
+/* Shown while the pointer is over the message (always reachable by keyboard) */
+.react-button {
+    min-width: 30px;
+    min-height: 30px;
+    padding: 0;
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+}
+
+.message-row:hover .react-button,
+.react-button:focus-visible {
+    opacity: 0.7;
+}
+
+.message-row .react-button:hover {
+    opacity: 1;
+}
+
+.reaction-popover > contents {
+    padding: 4px;
+}
+
+.reaction-choice {
+    font-size: 1.5em;
+    min-width: 40px;
+    min-height: 40px;
+    padding: 0;
+}
+
 .scroll-down-button {
     margin: 12px 18px;
 }
@@ -122,6 +182,73 @@ listview.chat-history > row {
 
 .message-text {
     line-height: 1.35;
+}
+
+/* ---------------------------------------------------------------------------
+ * NomadNet pages (PageView / MicronView)
+ * ------------------------------------------------------------------------- */
+
+listview.micron-page {
+    background: none;
+    padding: 12px 12px 18px 12px;
+}
+
+listview.micron-page > row {
+    padding: 0;
+    background: none;
+}
+
+/* Pages are written for terminals: monospace keeps ASCII art and tables intact */
+.micron-page label,
+.micron-page entry,
+.micron-page textview {
+    font-family: monospace;
+}
+
+.micron-heading {
+    border-radius: 6px;
+    padding: 3px 8px;
+    margin: 2px -8px;
+}
+
+.micron-heading label {
+    font-weight: bold;
+}
+
+.micron-h1 {
+    background-color: alpha(currentColor, 0.14);
+}
+
+.micron-h2 {
+    background-color: alpha(currentColor, 0.09);
+}
+
+.micron-h3 {
+    background-color: alpha(currentColor, 0.05);
+}
+
+.micron-form-line {
+    margin: 2px 0;
+}
+
+.micron-form-line entry,
+.micron-form-line checkbutton {
+    margin: 0 4px;
+}
+
+.micron-field-frame {
+    border-radius: 6px;
+    background-color: alpha(currentColor, 0.06);
+    margin: 0 4px;
+}
+
+.micron-field-frame textview {
+    background: none;
+    padding: 4px 6px;
+}
+
+.micron-divider {
+    opacity: 0.55;
 }
 
 /* ---------------------------------------------------------------------------

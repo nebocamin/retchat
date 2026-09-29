@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Globe: opens the pages of a NomadNet node (filled paths only, as GTK's
+     symbolic icon loader requires) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <path fill="#222222" fill-rule="evenodd" d="
+    M 8 1 A 7 7 0 1 0 8 15 A 7 7 0 1 0 8 1 Z
+    M 8 2.2 A 5.8 5.8 0 1 1 8 13.8 A 5.8 5.8 0 1 1 8 2.2 Z"/>
+  <path fill="#222222" fill-rule="evenodd" d="
+    M 8 1.3 C 6 1.3 4.7 4.3 4.7 8 C 4.7 11.7 6 14.7 8 14.7 C 10 14.7 11.3 11.7 11.3 8 C 11.3 4.3 10 1.3 8 1.3 Z
+    M 8 2.5 C 9.1 2.5 10.1 4.9 10.1 8 C 10.1 11.1 9.1 13.5 8 13.5 C 6.9 13.5 5.9 11.1 5.9 8 C 5.9 4.9 6.9 2.5 8 2.5 Z"/>
+  <path fill="#222222" d="M 1.8 5.2 H 14.2 V 6.4 H 1.8 Z M 1.8 9.6 H 14.2 V 10.8 H 1.8 Z M 7.4 1.5 H 8.6 V 14.5 H 7.4 Z"/>
+</svg>

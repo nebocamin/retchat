@@ -78,7 +78,23 @@ class Database:
                 )
             """)
 
+            # Emoji reactions. Every row is one received or sent reaction
+            # message (LXMF FIELD_REACTION); NomadNet stores these messages
+            # like any other, the hashes are used to hide them in the chat.
+            # emoji is '' for reactions whose content was rejected.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS reactions (
+                    reaction_hash TEXT PRIMARY KEY,
+                    conversation_hash TEXT NOT NULL,
+                    target_hash TEXT NOT NULL,
+                    sender_hash TEXT NOT NULL,
+                    emoji TEXT NOT NULL,
+                    timestamp REAL NOT NULL
+                )
+            """)
+
             # Create indexes for fast lookups
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_reactions_conv ON reactions(conversation_hash)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conversation_hash)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_time ON messages(timestamp)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_announces_time ON announces(last_seen)")
@@ -224,8 +240,54 @@ class Database:
         dest_hash = dest_hash.lower()
         with self._get_conn() as conn:
             conn.execute("DELETE FROM messages WHERE conversation_hash = ?", (dest_hash,))
+            conn.execute("DELETE FROM reactions WHERE conversation_hash = ?", (dest_hash,))
             conn.execute("DELETE FROM conversations WHERE destination_hash = ?", (dest_hash,))
             conn.commit()
+
+    # --- Reactions ---
+    def add_reaction(
+        self,
+        reaction_hash: str,
+        conversation_hash: str,
+        target_hash: str,
+        sender_hash: str,
+        emoji: str,
+        timestamp: float,
+    ):
+        """Store a reaction message; a message delivered twice is stored once."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT OR IGNORE INTO reactions (
+                    reaction_hash, conversation_hash, target_hash, sender_hash, emoji, timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (reaction_hash.lower(), conversation_hash.lower(), target_hash.lower(),
+                  sender_hash.lower(), emoji, timestamp))
+            conn.commit()
+
+    def get_reactions(self, conversation_hash: str, target_hash: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Reactions of a conversation (optionally of one message), oldest first."""
+        query = "SELECT * FROM reactions WHERE conversation_hash = ? AND emoji != ''"
+        params: List[Any] = [conversation_hash.lower()]
+        if target_hash is not None:
+            query += " AND target_hash = ?"
+            params.append(target_hash.lower())
+        with self._get_conn() as conn:
+            rows = conn.execute(query + " ORDER BY timestamp ASC", params).fetchall()
+            return [dict(r) for r in rows]
+
+    def has_reaction(self, conversation_hash: str, target_hash: str, sender_hash: str, emoji: str) -> bool:
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM reactions
+                WHERE conversation_hash = ? AND target_hash = ? AND sender_hash = ? AND emoji = ?
+                LIMIT 1
+            """, (conversation_hash.lower(), target_hash.lower(), sender_hash.lower(), emoji)).fetchone()
+            return row is not None
+
+    def get_reaction_hashes(self) -> set:
+        """Hashes of all known reaction messages (to hide them in the chat)."""
+        with self._get_conn() as conn:
+            return {r["reaction_hash"] for r in conn.execute("SELECT reaction_hash FROM reactions")}
 
     # --- Messages ---
     def get_messages(self, conversation_hash: str, limit: int = 200, offset: int = 0) -> List[Dict[str, Any]]:

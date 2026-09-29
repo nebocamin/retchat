@@ -1,4 +1,4 @@
-"""Row widget for discovered mesh peers (Announces)."""
+"""Row widget for discovered mesh peers and NomadNet nodes (Announces)."""
 
 from typing import Any, Dict
 
@@ -9,21 +9,32 @@ from gi.repository import Gtk, Adw, GLib
 
 from retchat.widgets.conversation_row import avatar_text
 
+# Shipped with Retchat (data/icons); Adwaita has no globe icon.
+NODE_ICON = "org.selfmade.Retchat-globe-symbolic"
+
 
 class AnnounceRow(Gtk.ListBoxRow):
+    """A contact (LXMF peer, can be chatted with) or a node (serves pages).
+
+    The kind is fixed per destination, so the row's button is chosen once.
+    """
+
     def __init__(self, announce_data: Dict[str, Any]):
         super().__init__()
         self.announce_data = announce_data
         self.dest_hash = announce_data["destination_hash"].lower()
+        self.is_node = announce_data.get("kind") == "node"
 
         self.action_row = Adw.ActionRow()
         self.action_row.set_activatable(False)
 
-        # Avatar
-        self.avatar = Adw.Avatar(size=40, show_initials=True)
+        # Avatar: initials for contacts, a globe for nodes
+        self.avatar = Adw.Avatar(size=40, show_initials=not self.is_node)
+        if self.is_node:
+            self.avatar.set_icon_name(NODE_ICON)
         self.action_row.add_prefix(self.avatar)
 
-        # Suffix container (Hops badge + Chat button)
+        # Suffix container (Hops badge + button)
         self.suffix_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         self.suffix_box.set_valign(Gtk.Align.CENTER)
 
@@ -33,16 +44,20 @@ class AnnounceRow(Gtk.ListBoxRow):
         self.hops_label.add_css_class("hops-badge")
         self.suffix_box.append(self.hops_label)
 
-        # Start Chat button
-        # Window action instead of a Python handler: a handler on a child widget
+        # Window actions instead of Python handlers: a handler on a child widget
         # that references the row forms a cycle through GTK that Python's garbage
         # collector can't break, so every removed row would stay alive.
-        self.chat_btn = Gtk.Button(icon_name="mail-message-new-symbolic",
-                                   action_name="win.announce-start-chat",
-                                   action_target=GLib.Variant.new_string(self.dest_hash))
-        self.chat_btn.add_css_class("flat")
-        self.chat_btn.set_tooltip_text("Chat mit diesem Kontakt starten")
-        self.suffix_box.append(self.chat_btn)
+        target = GLib.Variant.new_string(self.dest_hash)
+        if self.is_node:
+            self.open_btn = Gtk.Button(icon_name=NODE_ICON,
+                                       action_name="win.announce-open-page", action_target=target)
+            self.open_btn.set_tooltip_text("Seiten dieser Node öffnen")
+        else:
+            self.open_btn = Gtk.Button(icon_name="mail-message-new-symbolic",
+                                       action_name="win.announce-start-chat", action_target=target)
+            self.open_btn.set_tooltip_text("Chat mit diesem Kontakt starten")
+        self.open_btn.add_css_class("flat")
+        self.suffix_box.append(self.open_btn)
 
         self.action_row.add_suffix(self.suffix_box)
         self.set_child(self.action_row)
@@ -58,9 +73,9 @@ class AnnounceRow(Gtk.ListBoxRow):
 
         title = display_name or f"[{dest_hash[:8]}...{dest_hash[-4:]}]"
         self.action_row.set_title(GLib.markup_escape_text(title))
-        self.avatar.set_text(avatar_text(title))
+        self.avatar.set_text(avatar_text(title))  # also picks the avatar colour
 
-        sub_parts = [f"Ziel: {dest_hash[:12]}..."]
+        sub_parts = ["NomadNet-Seite" if self.is_node else "Kontakt", f"{dest_hash[:12]}…"]
         if iface:
             # Extract clean interface name
             if "[" in iface and "]" in iface:

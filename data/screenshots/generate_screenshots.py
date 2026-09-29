@@ -121,9 +121,9 @@ def make_datasheet(path):
         f.write(b"%PDF-1.4\n" + b"0" * 184_000)
 
 
-def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None, files=None):
+def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None, files=None, reactions=None):
     return {
-        "message_hash": f"{conv}{n:04d}",
+        "message_hash": f"{conv}{n:032d}",  # 64 hex digits like an LXMF hash
         "conversation_hash": conv,
         "is_outgoing": out,
         "content": text,
@@ -134,6 +134,7 @@ def msg(conv, n, text, ts, out=False, state=2, hops=0, image=None, files=None):
         "image_name": "sunset.png" if image else None,
         "image_size": os.path.getsize(image) if image else None,
         "files": files or [],
+        "reactions": reactions or [],
     }
 
 
@@ -145,8 +146,10 @@ def build_messages():
             msg(a, 2, "Yes, flashed it this morning. It's on the balcony now.", at(18, 5), out=True),
             msg(a, 3, "Nice. Which antenna are you using?", at(18, 6), hops=2),
             msg(a, 4, "A 5 dBi collinear for 868 MHz. I get the Reticulum community node over "
-                      "four hops, no internet involved at all.", at(18, 9), out=True),
-            msg(a, 5, "Here's the view from my mast tonight", at(18, 21), hops=2, image=PHOTO),
+                      "four hops, no internet involved at all.", at(18, 9), out=True,
+                reactions=[{"emoji": "🤯", "count": 1, "mine": False}]),
+            msg(a, 5, "Here's the view from my mast tonight", at(18, 21), hops=2, image=PHOTO,
+                reactions=[{"emoji": "😍", "count": 1, "mine": True}]),
             msg(a, 6, "Wow, that looks amazing!", at(18, 23), out=True),
             msg(a, 9, "Datasheet of the antenna, in case you want one too", at(18, 23), hops=2,
                 files=[{"path": DATASHEET, "name": "collinear-868-datasheet.pdf",
@@ -164,11 +167,20 @@ def build_messages():
 
 
 ANNOUNCES = [
+    dict(destination_hash=h(44), display_name="Mesh Café Pages", hops=3, kind="node"),
     dict(destination_hash=h(40), display_name="Frieda", hops=2, receiving_interface="RNodeInterface[LoRa 868]"),
     dict(destination_hash=h(41), display_name="Hackerspace Node", hops=1, receiving_interface="TCPInterface[Hub]"),
     dict(destination_hash=h(42), display_name="Greg", hops=3, receiving_interface="AutoInterface[Local]"),
     dict(destination_hash=h(43), display_name="Mountain Relay", hops=6, receiving_interface="RNodeInterface[LoRa 868]"),
 ]
+
+
+class DemoPageFetcher:
+    def fetch(self, request, on_status, on_done, use_cache=True):
+        pass
+
+    def cancel(self):
+        pass
 
 
 class DemoService:
@@ -177,6 +189,8 @@ class DemoService:
     app = None
     delivery_destination_hex = h(99)
     identity_hex = h(98)
+    own_node_hex = None
+    page_fetcher = DemoPageFetcher()
 
     def __init__(self):
         self.messages = build_messages()
@@ -202,6 +216,12 @@ class DemoService:
 
     def get_announces(self, query=None):
         return ANNOUNCES
+
+    def node_name(self, dest):
+        return next((a["display_name"] for a in ANNOUNCES if a["destination_hash"] == dest), None)
+
+    def chat_address(self, dest):
+        return dest
 
 
 # --------------------------------------------------------------------------- rendering helpers

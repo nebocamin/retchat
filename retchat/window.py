@@ -9,6 +9,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gio, GLib, Gdk, Graphene
 
 from retchat.database import Database
+from retchat.nomadnet_pages import parse_url
 from retchat.dialogs.interfaces_dialog import InterfacesDialog
 from retchat.dialogs.new_chat_dialog import NewChatDialog
 from retchat.dialogs.profile_dialog import ProfileDialog
@@ -16,6 +17,7 @@ from retchat.reticulum_service import ReticulumService
 from retchat.widgets.announce_row import AnnounceRow
 from retchat.widgets.chat_view import ChatView
 from retchat.widgets.conversation_row import ConversationRow
+from retchat.widgets.page_view import PageView
 
 
 # On a public hub thousands of nodes announce; each row costs ~80 KB of widgets.
@@ -93,6 +95,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.add_message_received_callback(self._on_service_message_received)
         self.service.add_message_state_callback(self._on_service_message_state)
         self.service.add_message_id_callback(self.chat_view.replace_message_hash)
+        self.service.add_reaction_callback(self._on_service_reaction)
         self.service.add_announce_callback(self._on_service_announce_received)
         self.service.add_path_resolved_callback(self._on_service_path_resolved)
         self.service.add_conversations_changed_callback(self._on_service_conversations_changed)
@@ -126,6 +129,16 @@ class RetchatWindow(Adw.ApplicationWindow):
         action_start_chat = Gio.SimpleAction.new("announce-start-chat", GLib.VariantType.new("s"))
         action_start_chat.connect("activate", lambda _a, p: self._on_announce_start_chat(p.get_string(), None))
         self.add_action(action_start_chat)
+
+        # Action: Open the pages of a NomadNet node (win.announce-open-page, target: node hash)
+        action_open_page = Gio.SimpleAction.new("announce-open-page", GLib.VariantType.new("s"))
+        action_open_page.connect("activate", lambda _a, p: self.open_page(p.get_string()))
+        self.add_action(action_open_page)
+
+        # Action: Open a nomadnetwork:// link from a message (win.open-nomadnet-url, target: URL)
+        action_open_url = Gio.SimpleAction.new("open-nomadnet-url", GLib.VariantType.new("s"))
+        action_open_url.connect("activate", lambda _a, p: self.open_page_url(p.get_string()))
+        self.add_action(action_open_url)
 
         # Action: Request Path (win.request_path)
         self.action_path = Gio.SimpleAction.new("request_path", None)
@@ -316,8 +329,17 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.chat_view = ChatView(
             on_back_clicked=self._on_chat_back_clicked,
             on_send_message=self._on_send_message,
+            on_send_reaction=self._on_send_reaction,
         )
         self.content_stack.add_named(self.chat_view, "chat")
+
+        # 3. NomadNet page browser
+        self.page_view = PageView(
+            self.service,
+            on_back_clicked=self._on_chat_back_clicked,
+            on_open_chat=self._open_chat_with,
+        )
+        self.content_stack.add_named(self.page_view, "page")
 
         self.content_stack.set_visible_child_name("empty")
         return self.content_stack
@@ -368,6 +390,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def open_conversation(self, dest_hash: str):
         dest_hash = dest_hash.lower()
+        self.page_view.leave()
         conv = self.service.get_conversation(dest_hash)
         if not conv:
             self.service.start_conversation(dest_hash)
@@ -395,6 +418,45 @@ class RetchatWindow(Adw.ApplicationWindow):
         if self.split_view.get_collapsed():
             self.split_view.set_show_sidebar(False)
 
+    def open_page(self, node_hash: str, path: Optional[str] = None):
+        """Show the pages of a NomadNet node in place of the chat."""
+        self._show_page_view()
+        self.page_view.open_node(node_hash.lower(), path)
+
+    def open_page_url(self, url: str):
+        """Open a NomadNet URL (e.g. a nomadnetwork:// link in a message)."""
+        try:
+            request = parse_url(url)
+        except ValueError as e:
+            self._show_toast(str(e))
+            return
+        if request.is_file:
+            self._show_toast("Datei-Downloads werden noch nicht unterstützt")
+            return
+        self._show_page_view()
+        self.page_view.open_request(request)
+
+    def _show_page_view(self):
+        # Leave the chat: incoming messages must not be marked read unseen.
+        self.current_dest_hash = None
+        self.chat_view.clear()
+        for action in (self.action_copy, self.action_rename, self.action_path):
+            action.set_enabled(False)
+        self.conv_list_box.unselect_all()
+        self.content_stack.set_visible_child_name("page")
+        if self.split_view.get_collapsed():
+            self.split_view.set_show_sidebar(False)
+
+    def _open_chat_with(self, lxmf_hash: str):
+        """Open (or start) a chat, e.g. from a page link or with a node's operator."""
+        lxmf_hash = self.service.chat_address(lxmf_hash)
+        self.service.start_conversation(lxmf_hash)
+        self._load_conversations()
+        self.open_conversation(lxmf_hash)
+
+    def _content_open(self) -> bool:
+        return bool(self.current_dest_hash) or self.content_stack.get_visible_child_name() == "page"
+
     def _on_chat_back_clicked(self):
         if self.split_view.get_collapsed():
             self.split_view.set_show_sidebar(True)
@@ -406,7 +468,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         if not is_collapsed:
             split_view.set_show_sidebar(True)
         else:
-            if self.current_dest_hash:
+            if self._content_open():
                 split_view.set_show_sidebar(False)
             else:
                 split_view.set_show_sidebar(True)
@@ -416,6 +478,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         is_collapsed = self.split_view.get_collapsed()
         if hasattr(self, "chat_view"):
             self.chat_view.set_back_button_mode(is_collapsed)
+        if hasattr(self, "page_view"):
+            self.page_view.set_back_button_mode(is_collapsed)
         if hasattr(self, "empty_sidebar_btn"):
             self.empty_sidebar_btn.set_visible(not is_collapsed)
 
@@ -453,9 +517,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.announce_rows.pop(last.dest_hash, None)
 
     def _on_announce_start_chat(self, dest_hash: str, display_name: str):
-        self.service.start_conversation(dest_hash)
-        self._load_conversations()
-        self.open_conversation(dest_hash)
+        self._open_chat_with(dest_hash)
 
     # --- Sending Messages ---
     def _on_send_message(self, dest_hash: str, content: str, attachment_path: Optional[str] = None):
@@ -467,6 +529,14 @@ class RetchatWindow(Adw.ApplicationWindow):
             self._update_or_add_conv_row(dest_hash)
         except Exception as e:
             self._show_toast(f"Fehler beim Senden: {e}")
+
+    def _on_send_reaction(self, dest_hash: str, message_hash: str, emoji: str):
+        try:
+            reactions = self.service.send_reaction(dest_hash, message_hash, emoji)
+        except Exception as e:
+            self._show_toast(f"Reaktion nicht gesendet: {e}")
+            return
+        self.chat_view.update_reactions(message_hash, reactions)
 
     def _update_or_add_conv_row(self, dest_hash: str):
         conv = self.service.get_conversation(dest_hash)
@@ -498,6 +568,10 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_service_message_state(self, message_hash: str, state: int):
         self.chat_view.update_message_state(message_hash, state)
+
+    def _on_service_reaction(self, conversation_hash: str, message_hash: str, reactions: List[Dict[str, Any]]):
+        if self.current_dest_hash == conversation_hash:
+            self.chat_view.update_reactions(message_hash, reactions)
 
     def _on_service_announce_received(self, announce_data: Dict[str, Any]):
         dest_hash = announce_data["destination_hash"].lower()
@@ -537,6 +611,10 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     def _on_new_chat_created(self, dest_hash: str, nickname: Optional[str]):
         dest_hash = dest_hash.lower()
+        chat_hash = self.service.chat_address(dest_hash)
+        if chat_hash != dest_hash:
+            self._show_toast("Das ist die Adresse einer NomadNet-Node – Chat mit ihrem Betreiber geöffnet")
+            dest_hash = chat_hash
         self.service.start_conversation(dest_hash)
         if nickname:
             self.service.set_custom_name(dest_hash, nickname)

@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Adw, Gio, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gtk, Pango
 
 from retchat.dialogs.image_viewer_dialog import ImageViewerDialog
 from retchat.models import MessageItem
@@ -16,6 +16,10 @@ from retchat.widgets.chat_history import CONTENT_MAX_WIDTH, ChatHistory
 from retchat.widgets.message_bubble import MessageBubble, load_thumbnail
 
 
+# Offered directly in the reaction popover; everything else via the emoji chooser.
+QUICK_REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🙏")
+
+
 class ChatView(Adw.Bin):
     """Shows one LXMF conversation (see ChatHistory for the scrolling behaviour)."""
 
@@ -23,18 +27,27 @@ class ChatView(Adw.Bin):
         self,
         on_back_clicked: Callable[[], None],
         on_send_message: Callable[[str, str, Optional[str]], None],
+        on_send_reaction: Optional[Callable[[str, str, str], None]] = None,
     ):
         super().__init__(hexpand=True, vexpand=True)
         self._on_back_clicked = on_back_clicked
         self._on_send_message = on_send_message
+        self._on_send_reaction = on_send_reaction
 
         self.current_dest_hash: Optional[str] = None
         self.current_conv_data: Optional[Dict[str, Any]] = None
         self.pending_attachment_path: Optional[str] = None
+        # Message the open reaction popover / emoji chooser refers to
+        self._reaction_target: Optional[str] = None
 
         self._items: Dict[str, MessageItem] = {}
         self.history = ChatHistory(
-            MessageItem, lambda: MessageBubble(on_image_clicked=self._on_image_clicked)
+            MessageItem,
+            lambda: MessageBubble(
+                on_image_clicked=self._on_image_clicked,
+                on_react_requested=self._show_reaction_picker,
+                peer_name=self._peer_name,
+            ),
         )
 
         toolbar_view = Adw.ToolbarView(bottom_bar_style=Adw.ToolbarStyle.RAISED)
@@ -53,7 +66,13 @@ class ChatView(Adw.Bin):
             action = Gio.SimpleAction.new(name, GLib.VariantType.new("(ss)"))
             action.connect("activate", lambda _a, p, fn=handler: fn(*p.unpack()))
             actions.add_action(action)
+        # Reaction chips in the bubbles (target: message hash, emoji)
+        react = Gio.SimpleAction.new("react", GLib.VariantType.new("(ss)"))
+        react.connect("activate", lambda _a, p: self._react(*p.unpack()))
+        actions.add_action(react)
         self.insert_action_group("chat", actions)
+
+        self._build_reaction_picker()
 
     # --- UI construction ------------------------------------------------------
 
@@ -140,6 +159,42 @@ class ChatView(Adw.Bin):
         return Adw.Clamp(child=box, maximum_size=CONTENT_MAX_WIDTH,
                          tightening_threshold=CONTENT_MAX_WIDTH - 120)
 
+    def _build_reaction_picker(self):
+        """Popover with frequent reactions, and the full emoji chooser.
+
+        Both are shared by all bubbles (rows are recycled) and parented to
+        the chat view; they point at the bubble they were opened for.
+        """
+        self.reaction_popover = Gtk.Popover()
+        self.reaction_popover.add_css_class("reaction-popover")
+        box = Gtk.Box(spacing=2)
+        for emoji in QUICK_REACTIONS:
+            btn = Gtk.Button(label=emoji, tooltip_text=f"Mit {emoji} reagieren")
+            btn.add_css_class("flat")
+            btn.add_css_class("reaction-choice")
+            btn.connect("clicked", lambda _b, e=emoji: self._pick_reaction(e))
+            box.append(btn)
+        more_btn = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="Weitere Emojis",
+                              valign=Gtk.Align.CENTER)
+        more_btn.add_css_class("flat")
+        more_btn.add_css_class("circular")
+        more_btn.connect("clicked", lambda _b: self._show_emoji_chooser())
+        box.append(more_btn)
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=2, margin_end=2))
+        copy_btn = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Text kopieren",
+                              valign=Gtk.Align.CENTER)
+        copy_btn.add_css_class("flat")
+        copy_btn.add_css_class("circular")
+        copy_btn.connect("clicked", lambda _b: self._copy_reaction_target_text())
+        box.append(copy_btn)
+        self._reaction_copy_btn = copy_btn
+        self.reaction_popover.set_child(box)
+        self.reaction_popover.set_parent(self)
+
+        self.emoji_chooser = Gtk.EmojiChooser()
+        self.emoji_chooser.connect("emoji-picked", lambda _c, text: self._pick_reaction(text))
+        self.emoji_chooser.set_parent(self)
+
     def _update_menu(self):
         """Chat menu; the delete entry targets the currently shown contact."""
         menu = Gio.Menu()
@@ -162,6 +217,7 @@ class ChatView(Adw.Bin):
 
     def clear(self):
         """Forget the shown conversation (e.g. after it was deleted)."""
+        self._close_reaction_picker()
         self.current_dest_hash = None
         self.current_conv_data = None
         self._items = {}
@@ -203,6 +259,7 @@ class ChatView(Adw.Bin):
 
     def load_conversation(self, conv_data: Dict[str, Any], messages: List[Dict[str, Any]]):
         """Replace the shown conversation and jump to the newest message."""
+        self._close_reaction_picker()
         self.current_conv_data = conv_data
         self.current_dest_hash = conv_data["destination_hash"].lower()
         self._clear_pending_attachment()
@@ -221,6 +278,8 @@ class ChatView(Adw.Bin):
         existing = self._items.get(msg_data.get("message_hash"))
         if existing is not None:
             existing.state = int(msg_data.get("state") or 0)
+            if "reactions" in msg_data and msg_data["reactions"] != existing.reactions:
+                existing.reactions = list(msg_data["reactions"] or [])
             return
 
         item = MessageItem(msg_data)
@@ -231,6 +290,12 @@ class ChatView(Adw.Bin):
         item = self._items.get(message_hash)
         if item is not None:
             item.state = state
+
+    def update_reactions(self, message_hash: str, reactions: List[Dict[str, Any]]):
+        """Show the reactions ({"emoji", "count", "mine"}) of a shown message."""
+        item = self._items.get(message_hash)
+        if item is not None:
+            item.reactions = list(reactions)
 
     def replace_message_hash(self, old_hash: str, new_hash: str):
         """A queued message was sent and got its LXMF hash; follow it from now on."""
@@ -363,3 +428,54 @@ class ChatView(Adw.Bin):
             image_name=item.image_name,
             image_size=item.image_size_or_none,
         ).present()
+
+    # --- Reactions ---------------------------------------------------------------
+
+    def _peer_name(self) -> str:
+        conv = self.current_conv_data or {}
+        dest = self.current_dest_hash or ""
+        return conv.get("custom_name") or conv.get("display_name") or (f"{dest[:8]}…" if dest else "")
+
+    def _show_reaction_picker(self, item: MessageItem, widget: Gtk.Widget, x: float, y: float):
+        """Open the quick reactions for ``item``, pointing at (x, y) in ``widget``."""
+        self._close_reaction_picker()
+        self._reaction_target = item.message_hash
+        ok, point = widget.compute_point(self, Graphene.Point().init(x, y))
+        if ok:
+            rect = Gdk.Rectangle()
+            rect.x, rect.y, rect.width, rect.height = int(point.x), int(point.y), 1, 1
+            self.reaction_popover.set_pointing_to(rect)
+            self.emoji_chooser.set_pointing_to(rect)
+        self._reaction_copy_btn.set_visible(bool(item.content))
+        self.reaction_popover.popup()
+
+    def _show_emoji_chooser(self):
+        self.reaction_popover.popdown()
+        if self._reaction_target:
+            self.emoji_chooser.popup()
+
+    def _close_reaction_picker(self):
+        self.reaction_popover.popdown()
+        self.emoji_chooser.popdown()
+        self._reaction_target = None
+
+    def _pick_reaction(self, emoji: str):
+        target = self._reaction_target
+        self._close_reaction_picker()
+        if target:
+            self._react(target, emoji)
+
+    def _react(self, message_hash: str, emoji: str):
+        item = self._items.get(message_hash)
+        if item is None or not self.current_dest_hash or not self._on_send_reaction:
+            return
+        if any(r.get("mine") and r.get("emoji") == emoji for r in (item.reactions or [])):
+            return  # already reacted with it; reactions can't be withdrawn
+        self._on_send_reaction(self.current_dest_hash, message_hash, emoji)
+
+    def _copy_reaction_target_text(self):
+        item = self._items.get(self._reaction_target or "")
+        self._close_reaction_picker()
+        if item is not None and item.content:
+            self.get_clipboard().set(item.content)
+            self._toast("Text kopiert")
