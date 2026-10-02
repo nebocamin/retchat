@@ -79,13 +79,16 @@ To update, install the new bundle into the **same** installation (`--user` or `-
 
 ### Run from source
 
-Requires Python 3, GTK 4.12+, Libadwaita 1.5+ and PyGObject, plus the Python packages from `setup.py` (`rns`, `lxmf`, `nomadnet`, …):
+Requires Python 3, GTK 4.12+, Libadwaita 1.5+ and PyGObject, plus the Python packages pinned in `requirements.txt` (`rns`, `lxmf`, `nomadnet`, …):
 
 ```bash
 python3 -m venv --system-site-packages .venv
-.venv/bin/pip install -e .
+.venv/bin/pip install --no-deps -r requirements.txt
+.venv/bin/pip install --no-deps -e .
 ./retchat.sh
 ```
+
+Tests: `.venv/bin/python -m pytest tests`
 
 ---
 
@@ -98,6 +101,17 @@ python3 -m venv --system-site-packages .venv
 ```
 
 The aarch64 bundle is cross-packaged by `build_aarch64_bundle.py`: it downloads prebuilt aarch64 wheels from PyPI and assembles the Flatpak without emulation.
+
+Both bundles install exactly the versions in `requirements.txt`, transitive dependencies included. In the x86_64 manifest the file is a source of the `python-dependencies` module, so flatpak-builder rebuilds that module when (and only when) a pin changes; otherwise it reuses its cached build.
+
+### Updating dependencies
+
+Retchat hooks into internals of RNS, LXMF and NomadNet (replaced methods, callbacks, tuple layouts). Updates are therefore deliberate, never picked up automatically:
+
+1. `tools/check_updates.py` lists pins with newer releases on PyPI.
+2. Raise the pins in `requirements.txt`. For new or changed dependencies of a package, check its metadata (`pip install --dry-run --ignore-installed --report …`); installs use `--no-deps`, so the file must list everything.
+3. Update the venv (`.venv/bin/pip install --no-deps -r requirements.txt`) and run the tests. `tests/test_library_contract.py` checks every library internal Retchat relies on; if one fails, adapt the hook before releasing. Also read the release notes for behaviour changes the tests can't see.
+4. Rebuild both bundles and update *Tested with* below.
 
 ---
 
@@ -126,6 +140,8 @@ retchat/
 ├── org.selfmade.Retchat.metainfo.xml  # AppStream metadata
 ├── org.selfmade.Retchat.desktop       # Desktop entry (desktop and mobile form factor)
 ├── setup.py                           # Python package definition
+├── requirements.txt                   # Exact dependency versions for all builds
+├── tools/check_updates.py             # Lists pins with newer releases on PyPI
 ├── main.py / retchat.sh               # Entry point / local launcher
 ├── data/icons/
 │   ├── generate_icon.py               # Generates the app icon (ratchet-wheel speech bubble)

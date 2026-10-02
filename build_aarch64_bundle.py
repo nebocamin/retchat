@@ -13,6 +13,14 @@ WHEELS_DIR = os.path.join(BASE_DIR, ".wheels-aarch64")
 BUILD_DIR = os.path.join(BASE_DIR, ".flatpak-build-aarch64")
 REPO_DIR = os.path.join(BASE_DIR, ".flatpak-repo-aarch64")
 BUNDLE_PATH = os.path.join(BASE_DIR, "retchat-aarch64.flatpak")
+REQUIREMENTS = os.path.join(BASE_DIR, "requirements.txt")
+# Python of the GNOME 50 runtime
+PYTHON_VERSION = "3.13"
+# Wheel tags the runtime (glibc 2.42) can load. pip only accepts the tags
+# given, not older ones implied by them; with manylinux2014 alone, packages
+# that only publish newer wheels (e.g. pillow 12.3) silently fell back to
+# older versions.
+MANYLINUX_TAGS = ["manylinux2014"] + [f"manylinux_2_{v}" for v in (17, 24, 27, 28, 31, 34, 35, 36, 38, 39)]
 
 
 def main():
@@ -23,19 +31,20 @@ def main():
     if os.path.exists(WHEELS_DIR):
         shutil.rmtree(WHEELS_DIR)
     os.makedirs(WHEELS_DIR)
-    pkgs = [
-        "rns", "lxmf", "msgpack", "cryptography",
-        "pyserial", "cffi", "pycparser", "setuptools", "wheel",
-        "nomadnet", "qrcode", "urwid", "wcwidth", "pillow"
-    ]
+    # The exact versions of requirements.txt (as the x86_64 manifest); the
+    # list is complete, so dependencies aren't resolved again.
+    platforms = []
+    for tag in MANYLINUX_TAGS:
+        platforms += ["--platform", f"{tag}_aarch64"]
     subprocess.run([
         "pip", "download",
         "--only-binary=:all:",
-        "--platform", "manylinux2014_aarch64",
-        "--python-version", "3.13",
+        "--no-deps",
+        *platforms,
+        "--python-version", PYTHON_VERSION,
         "--implementation", "cp",
         "--dest", WHEELS_DIR,
-        *pkgs
+        "-r", REQUIREMENTS,
     ], check=True)
 
     print("=== 2. Preparing Flatpak app structure ===")
