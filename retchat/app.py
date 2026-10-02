@@ -1,12 +1,13 @@
 """Adw.Application implementation for Retchat."""
 
+import gc
 import os
 import sys
 
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
-from gi.repository import Gtk, Adw, Gdk, Gio
+from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 from retchat.database import Database
 from retchat.reticulum_service import ReticulumService
@@ -17,6 +18,33 @@ APP_ID = "org.selfmade.Retchat"
 VERSION = "0.1.0"
 # Icons of a source checkout; installed builds (Flatpak) use /app/share/icons.
 SOURCE_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "icons")
+
+# Seconds after start (NomadNet and the window are loaded) and between refreezes
+GC_FIRST_FREEZE_DELAY = 60
+GC_REFREEZE_INTERVAL = 600
+
+
+def _refreeze_heap() -> bool:
+    """Exclude long-lived objects from Python's full garbage collections.
+
+    RNS's Transport job loop runs gc.collect() whenever a path, link,
+    receipt or path request expires, on a busy network many times a
+    minute. A full collection scans every tracked object of the process
+    (GTK wrappers, NomadNet/LXMF state, RNS tables); that was the largest
+    remaining CPU cost. Frozen objects are skipped. Unfreezing and
+    collecting first lets cycles that died since the last freeze be freed,
+    so nothing leaks for longer than one interval.
+    """
+    gc.unfreeze()
+    gc.collect()
+    gc.freeze()
+    return True
+
+
+def _start_heap_freezing() -> bool:
+    _refreeze_heap()
+    GLib.timeout_add_seconds(GC_REFREEZE_INTERVAL, _refreeze_heap)
+    return False
 
 
 class RetchatApp(Adw.Application):
@@ -44,6 +72,7 @@ class RetchatApp(Adw.Application):
         # Initialize Database and Reticulum Service
         self.db = Database()
         self.service = ReticulumService(self.db)
+        GLib.timeout_add_seconds(GC_FIRST_FREEZE_DELAY, _start_heap_freezing)
 
     def _load_css(self):
         css_path = os.path.join(os.path.dirname(__file__), "style.css")
