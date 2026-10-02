@@ -358,10 +358,6 @@ class RetchatWindow(Adw.ApplicationWindow):
     def _load_conversations(self, query: Optional[str] = None):
         conversations = self.service.get_conversations(query=query)
 
-        # Clear existing rows
-        _remove_rows(self.conv_list_box)
-        self.conv_rows.clear()
-
         if query:
             self.conv_empty_page.set_title("Keine Chats gefunden")
             self.conv_empty_page.set_description(f"Keine Chats gefunden für «{query}».")
@@ -369,10 +365,29 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.conv_empty_page.set_title("Keine Chats")
             self.conv_empty_page.set_description("Starte einen Chat über das '+' Symbol oben.")
 
+        # Rows are reused; the list is only rebuilt if its order changed (an
+        # announce of a contact changes nothing but maybe its name or hops).
+        order = [conv["destination_hash"] for conv in conversations]
+        current = []
+        i = 0
+        while row := self.conv_list_box.get_row_at_index(i):
+            current.append(row.dest_hash)
+            i += 1
+
+        rows = {}
         for conv in conversations:
-            row = ConversationRow(conv)
-            self.conv_rows[conv["destination_hash"]] = row
-            self.conv_list_box.append(row)
+            row = self.conv_rows.get(conv["destination_hash"])
+            if row is not None:
+                row.update_data(conv)
+            else:
+                row = ConversationRow(conv)
+            rows[conv["destination_hash"]] = row
+
+        if order != current:
+            _remove_rows(self.conv_list_box)
+            for dest_hash in order:
+                self.conv_list_box.append(rows[dest_hash])
+        self.conv_rows = rows
 
     def _on_search_changed(self, entry: Gtk.SearchEntry):
         q = entry.get_text().strip()

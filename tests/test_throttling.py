@@ -110,6 +110,22 @@ def test_announces_batched_newest_per_destination(service, timers, monkeypatch):
     assert len(timers) == 2  # next batch scheduled again
 
 
+def test_conversations_changed_merged(service, timers):
+    calls = []
+    service.add_conversations_changed_callback(lambda: calls.append(1))
+
+    for _ in range(10):
+        service._on_conversations_changed_nomadnet()
+    assert len(timers) == 1
+    assert calls == []
+
+    _ms, flush, args = timers[0]
+    flush(*args)
+    assert calls == [1]
+    service._schedule_conversations_changed()
+    assert len(timers) == 2
+
+
 def test_database_shared_connection_across_threads(tmp_path):
     db = Database(str(tmp_path / "test.db"))
     errors = []

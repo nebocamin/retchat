@@ -64,6 +64,8 @@ PROPAGATION_SIZE_LIMIT = 256_000
 STAMP_COST_SAVE_INTERVAL = 60.0
 # Seconds announces are collected before the UI is told about them
 ANNOUNCE_BATCH_INTERVAL = 5.0
+# Seconds after the last "conversations changed" event before the UI reloads
+CONVERSATIONS_CHANGED_DELAY = 1.0
 
 
 def is_sendable_image(path: str) -> bool:
@@ -323,6 +325,9 @@ class ReticulumService:
         self._announce_lock = threading.Lock()
         self._announce_batch: Dict[str, Dict[str, Any]] = {}
         self._announce_flush_scheduled = False
+        # See _schedule_conversations_changed
+        self._conv_changed_lock = threading.Lock()
+        self._conv_changed_scheduled = False
 
         # Ensure ~/.reticulum/config has TCP enabled as default, and enable_transport=False
         self._ensure_tcp_default_config()
@@ -672,8 +677,59 @@ class ReticulumService:
         Conversation.query_for_peer(source_hash)
         return conv
 
+    def _conversation_summary(self, source_hash: str, display_name: Optional[str], unread: int,
+                              activity: float, custom_name: Optional[str]) -> Dict[str, Any]:
+        """Chat list entry of an existing conversation (``source_hash`` lowercase)."""
+        dn = display_name if (display_name and display_name != "Undefined") else None
+
+        conv = self.conversation(source_hash)
+        last_text = ""
+        last_time = activity if activity else 0.0
+
+        last_m = None
+        for m in sorted(conv.messages, key=lambda m: m.sort_timestamp, reverse=True):
+            if not self._is_reaction_message(m, source_hash):
+                last_m = m
+                break
+            _release(m)
+        if last_m is not None:
+            try:
+                last_text = (last_m.get_content() or "").strip()
+            except Exception:
+                pass
+            try:
+                last_time = last_m.get_timestamp() or last_m.sort_timestamp
+            except Exception:
+                pass
+            try:
+                lm_hash = last_m.get_hash().hex() if last_m.get_hash() else ""
+                info = self._attachment_info(self._attachments(lm_hash, last_m))
+                last_text = self._preview_text(last_text, info)
+            except Exception:
+                pass
+            _release(last_m)
+
+        hops = 0
+        try:
+            h = RNS.Transport.hops_to(bytes.fromhex(source_hash))
+            if h != RNS.Transport.PATHFINDER_M:
+                hops = h
+        except Exception:
+            pass
+
+        return {
+            "destination_hash": source_hash,
+            "display_name": dn,
+            "custom_name": custom_name,
+            "last_message_text": last_text,
+            "last_message_time": last_time,
+            "unread_count": unread,
+            "hops": hops,
+        }
+
     def get_conversations(self, query: Optional[str] = None) -> List[Dict[str, Any]]:
         raw_list = Conversation.conversation_list(self.app)
+        custom_names = self.db.get_all_custom_names()
         results = []
         q = query.strip().lower() if query else None
 
@@ -681,75 +737,56 @@ class ReticulumService:
             try:
                 source_hash, display_name, trust, sort_name, unread, activity, failed = entry[:7]
                 source_hash = source_hash.lower()
-
-                custom_name = self.db.get_custom_name(source_hash)
-                dn = display_name if (display_name and display_name != "Undefined") else None
-
-                conv = self.conversation(source_hash)
-                last_text = ""
-                last_time = activity if activity else 0.0
-
-                last_m = None
-                for m in sorted(conv.messages, key=lambda m: m.sort_timestamp, reverse=True):
-                    if not self._is_reaction_message(m, source_hash):
-                        last_m = m
-                        break
-                    _release(m)
-                if last_m is not None:
-                    try:
-                        last_text = (last_m.get_content() or "").strip()
-                    except Exception:
-                        pass
-                    try:
-                        last_time = last_m.get_timestamp() or last_m.sort_timestamp
-                    except Exception:
-                        pass
-                    try:
-                        lm_hash = last_m.get_hash().hex() if last_m.get_hash() else ""
-                        info = self._attachment_info(self._attachments(lm_hash, last_m))
-                        last_text = self._preview_text(last_text, info)
-                    except Exception:
-                        pass
-                    _release(last_m)
-
-                hops = 0
-                try:
-                    dest_bytes = bytes.fromhex(source_hash)
-                    h = RNS.Transport.hops_to(dest_bytes)
-                    if h != RNS.Transport.PATHFINDER_M:
-                        hops = h
-                except Exception:
-                    pass
-
+                c = self._conversation_summary(source_hash, display_name, unread, activity,
+                                               custom_names.get(source_hash))
                 if q:
-                    match_hash = q in source_hash
-                    match_cname = bool(custom_name and q in custom_name.lower())
-                    match_dname = bool(dn and q in dn.lower())
-                    match_text = bool(last_text and q in last_text.lower())
-                    if not (match_hash or match_cname or match_dname or match_text):
+                    texts = (source_hash, c["custom_name"], c["display_name"], c["last_message_text"])
+                    if not any(t and q in t.lower() for t in texts):
                         continue
-
-                results.append({
-                    "destination_hash": source_hash,
-                    "display_name": dn,
-                    "custom_name": custom_name,
-                    "last_message_text": last_text,
-                    "last_message_time": last_time,
-                    "unread_count": unread,
-                    "hops": hops,
-                })
+                results.append(c)
             except Exception as e:
                 RNS.log(f"Retchat: Error loading conversation entry {entry}: {e}", RNS.LOG_ERROR)
 
         results.sort(key=lambda c: c.get("last_message_time", 0.0), reverse=True)
         return results
 
+    def _conversation_unread(self, source_hash: bytes, conv_dir: str) -> int:
+        # As in NomadNet's Conversation.conversation_list
+        if source_hash in Conversation.unread_conversations:
+            return Conversation.unread_conversations[source_hash]
+        unread_path = os.path.join(conv_dir, "unread")
+        if not os.path.isfile(unread_path):
+            return 0
+        try:
+            with open(unread_path, "r") as uf:
+                content = uf.read().strip()
+                unread = int(content) if content else 1
+        except Exception:
+            unread = 1
+        Conversation.unread_conversations[source_hash] = unread
+        return unread
+
     def get_conversation(self, dest_hex: str) -> Optional[Dict[str, Any]]:
+        """Chat list entry of one chat, without building the whole list."""
         dest_hex = dest_hex.strip().lower()
-        convs = self.get_conversations()
-        for c in convs:
-            if c["destination_hash"] == dest_hex:
-                return c
+        conv_dir = os.path.join(self.app.conversationpath, dest_hex)
+        if _HEX_DEST_RE.fullmatch(dest_hex) and os.path.isdir(conv_dir):
+            try:
+                source_hash = bytes.fromhex(dest_hex)
+                display_name = self.app.directory.display_name(source_hash)
+                if display_name is None:
+                    app_data = RNS.Identity.recall_app_data(source_hash)
+                    if app_data:
+                        display_name = LXMF.display_name_from_app_data(app_data)
+                try:
+                    activity = os.path.getmtime(conv_dir)
+                except OSError:
+                    activity = 0
+                return self._conversation_summary(dest_hex, display_name,
+                                                  self._conversation_unread(source_hash, conv_dir),
+                                                  activity, self.db.get_custom_name(dest_hex))
+            except Exception as e:
+                RNS.log(f"Retchat: Error loading conversation {dest_hex}: {e}", RNS.LOG_ERROR)
         custom_name = self.db.get_custom_name(dest_hex)
         return {
             "destination_hash": dest_hex,
@@ -1245,7 +1282,7 @@ class ReticulumService:
                 except Exception as e:
                     RNS.log(f"Retchat: Failed to send pending message: {e}", RNS.LOG_ERROR)
             sent.append(dest_hex)
-            GLib.idle_add(self._notify_conversations_changed)
+            self._schedule_conversations_changed()
         return sent
 
     def _background_worker(self):
@@ -1461,7 +1498,7 @@ class ReticulumService:
             }
 
             GLib.idle_add(self._notify_message_received, msg_dict)
-            GLib.idle_add(self._notify_conversations_changed)
+            self._schedule_conversations_changed()
         except Exception as e:
             RNS.log(f"Retchat: Error handling inbound message: {e}", RNS.LOG_ERROR)
 
@@ -1515,7 +1552,25 @@ class ReticulumService:
         return False
 
     def _on_conversations_changed_nomadnet(self, *args):
-        GLib.idle_add(self._notify_conversations_changed)
+        # NomadNet calls this for every stored message, but also for every
+        # announce and path response of a peer with a chat.
+        self._schedule_conversations_changed()
+
+    def _schedule_conversations_changed(self):
+        """Tell the UI that the chat list changed, at most once per
+        CONVERSATIONS_CHANGED_DELAY (thread-safe): events in that time are
+        merged into one reload of the whole list."""
+        with self._conv_changed_lock:
+            if self._conv_changed_scheduled:
+                return
+            self._conv_changed_scheduled = True
+        GLib.timeout_add(int(CONVERSATIONS_CHANGED_DELAY * 1000), self._flush_conversations_changed)
+
+    def _flush_conversations_changed(self) -> bool:
+        with self._conv_changed_lock:
+            self._conv_changed_scheduled = False
+        self._notify_conversations_changed()
+        return False
 
     def _notify_message_received(self, msg_dict: Dict[str, Any]) -> bool:
         for cb in self._message_received_callbacks:
