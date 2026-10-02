@@ -60,6 +60,9 @@ MAX_ATTACHMENT_SIZE = 900_000
 # can only be delivered directly.
 PROPAGATION_SIZE_LIMIT = 256_000
 
+# Seconds between saves of LXMF's outbound stamp costs (see _throttle_stamp_cost_saves)
+STAMP_COST_SAVE_INTERVAL = 60.0
+
 
 def is_sendable_image(path: str) -> bool:
     """Whether ``path`` is sent as (downscaled) image instead of as a file."""
@@ -310,6 +313,10 @@ class ReticulumService:
         # Names of NomadNet nodes from their announces (hex hash -> name)
         self._node_names: Dict[str, str] = {}
         self._page_fetcher: Optional[PageFetcher] = None
+        # See _throttle_stamp_cost_saves
+        self._stamp_cost_router = None
+        self._stamp_costs_dirty = False
+        self._stamp_costs_saved_at = time.monotonic()
 
         # Ensure ~/.reticulum/config has TCP enabled as default, and enable_transport=False
         self._ensure_tcp_default_config()
@@ -327,6 +334,7 @@ class ReticulumService:
 
         # Hook announce logger on app.directory to dispatch announces without extra overhead
         self._hook_directory_announces()
+        self._throttle_stamp_cost_saves()
 
         # Periodic background worker for flushing pending messages
         self._poll_stop = False
@@ -497,6 +505,44 @@ class ReticulumService:
 
         cfg.write()
         return cfg_path
+
+    # --- LXMF stamp costs ---
+    def _throttle_stamp_cost_saves(self):
+        """Save LXMF's outbound stamp costs at most every STAMP_COST_SAVE_INTERVAL.
+
+        LXMRouter.update_stamp_cost runs for every LXMF announce that carries
+        a stamp cost and starts a thread that packs the *whole* table (one
+        entry per announcing peer, kept for 45 days: thousands of entries)
+        with the pure-Python msgpack and rewrites the file. On a busy network
+        that is several 300+ KB rewrites per second for a one-entry change.
+        Here the table is only updated in memory; the background worker
+        saves it periodically and shutdown() saves it at exit (LXMRouter's
+        own exit handler doesn't). Costs lost in a crash are learned again
+        from the next announce.
+        """
+        router = getattr(self.app, "message_router", None)
+        if router is None or not hasattr(router, "outbound_stamp_costs") \
+                or not hasattr(router, "save_outbound_stamp_costs"):
+            return
+
+        def update_stamp_cost(destination_hash, stamp_cost):
+            router.outbound_stamp_costs[destination_hash] = [time.time(), stamp_cost]
+            self._stamp_costs_dirty = True
+
+        router.update_stamp_cost = update_stamp_cost
+        self._stamp_cost_router = router
+
+    def _save_stamp_costs(self, force: bool = False):
+        router = self._stamp_cost_router
+        if router is None or not self._stamp_costs_dirty:
+            return
+        now = time.monotonic()
+        if not force and now - self._stamp_costs_saved_at < STAMP_COST_SAVE_INTERVAL:
+            return
+        # Cleared before saving: an update during the save marks it again.
+        self._stamp_costs_dirty = False
+        self._stamp_costs_saved_at = now
+        router.save_outbound_stamp_costs()
 
     # --- Directory Announce Hooking ---
     def _hook_directory_announces(self):
@@ -1188,6 +1234,10 @@ class ReticulumService:
                 self.flush_pending()
             except Exception as e:
                 RNS.log(f"Retchat: Error in background worker: {e}", RNS.LOG_DEBUG)
+            try:
+                self._save_stamp_costs()
+            except Exception as e:
+                RNS.log(f"Retchat: Error saving stamp costs: {e}", RNS.LOG_ERROR)
 
     # --- Announces & Path Finding ---
     def get_announces(self, query: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -1746,6 +1796,10 @@ class ReticulumService:
         self._poll_stop = True
         if self._page_fetcher is not None:
             self._page_fetcher.cancel()
+        try:
+            self._save_stamp_costs(force=True)
+        except Exception as e:
+            RNS.log(f"Retchat: Error saving stamp costs: {e}", RNS.LOG_ERROR)
         try:
             self.app.exit_handler()
         except Exception as e:
