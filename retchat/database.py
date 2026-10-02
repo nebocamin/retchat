@@ -1,9 +1,11 @@
 """Database layer for Retchat using SQLite."""
 
+import contextlib
 import os
 import sqlite3
+import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 
 class Database:
@@ -13,12 +15,28 @@ class Database:
             os.makedirs(data_dir, exist_ok=True)
             db_path = os.path.join(data_dir, "retchat.db")
         self.db_path = db_path
+        # One connection for the app's lifetime instead of one per query (the
+        # chat list asks for every chat's name on each refresh). Used from
+        # GTK and Reticulum threads, so access is serialised.
+        self._conn: Optional[sqlite3.Connection] = None
+        self._lock = threading.RLock()
         self._init_db()
 
-    def _get_conn(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
+    @contextlib.contextmanager
+    def _get_conn(self) -> Iterator[sqlite3.Connection]:
+        """The shared connection, locked; commits on success, rolls back on error."""
+        with self._lock:
+            if self._conn is None:
+                self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                self._conn.row_factory = sqlite3.Row
+            with self._conn:
+                yield self._conn
+
+    def close(self):
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     def _init_db(self):
         with self._get_conn() as conn:

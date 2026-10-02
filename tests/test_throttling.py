@@ -108,3 +108,25 @@ def test_announces_batched_newest_per_destination(service, timers, monkeypatch):
 
     service._dispatch_directory_announce(bytes.fromhex(PEER_A), b"Alice", "peer")
     assert len(timers) == 2  # next batch scheduled again
+
+
+def test_database_shared_connection_across_threads(tmp_path):
+    db = Database(str(tmp_path / "test.db"))
+    errors = []
+
+    def worker(n):
+        try:
+            for i in range(50):
+                dest = f"{n:02x}{i:02x}" * 8
+                db.set_custom_name(dest, f"name {n} {i}")
+                assert db.get_custom_name(dest) == f"name {n} {i}"
+        except Exception as e:  # pragma: no cover - reported below
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert len(db.get_all_custom_names()) == 200
