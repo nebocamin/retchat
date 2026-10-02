@@ -10,7 +10,7 @@ gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 from retchat.database import Database
-from retchat.reticulum_service import ReticulumService
+from retchat.reticulum_service import ReticulumService, library_versions
 from retchat.widgets.attachment_row import purge_open_copies
 from retchat.window import RetchatWindow
 
@@ -105,6 +105,8 @@ class RetchatApp(Adw.Application):
             website="https://github.com/nebocamin/retchat",
             issue_url="https://github.com/nebocamin/retchat/issues",
             license_type=Gtk.License.GPL_3_0,
+            # "Troubleshooting" page, e.g. for bug reports
+            debug_info="\n".join(f"{name} {ver}" for name, ver in library_versions().items()),
         )
         about.add_link("Reticulum Network", "https://reticulum.network/")
         about.present(self.get_active_window())

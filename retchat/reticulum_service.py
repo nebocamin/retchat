@@ -1,5 +1,6 @@
 """Reticulum and NomadNet LXMF Service integration for Retchat."""
 
+import importlib.metadata
 import os
 import re
 import shutil
@@ -28,6 +29,17 @@ STATE_SENDING = 0
 STATE_SENT = 1
 STATE_DELIVERED = 2
 STATE_FAILED = 3
+
+def library_versions() -> Dict[str, str]:
+    """Installed versions of the Reticulum stack (pinned in requirements.txt)."""
+    versions = {}
+    for name in ("rns", "lxmf", "nomadnet"):
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = "unknown"
+    return versions
+
 
 def _release(m: ConversationMessage):
     """Drop a fully loaded LXMF message (content, fields, image data) again.
@@ -353,7 +365,8 @@ class ReticulumService:
         self._poll_thread.start()
 
         RNS.log(
-            f"Retchat: ReticulumService initialised with NomadNet backend. "
+            f"Retchat: ReticulumService initialised with NomadNet backend "
+            f"({', '.join(f'{n} {v}' for n, v in library_versions().items())}). "
             f"Identity: {self.identity_hex}, Destination: {self.delivery_destination_hex}",
             RNS.LOG_NOTICE
         )

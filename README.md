@@ -102,7 +102,7 @@ Tests: `.venv/bin/python -m pytest tests`
 
 The aarch64 bundle is cross-packaged by `build_aarch64_bundle.py`: it downloads prebuilt aarch64 wheels from PyPI and assembles the Flatpak without emulation.
 
-Both bundles install exactly the versions in `requirements.txt`, transitive dependencies included. In the x86_64 manifest the file is a source of the `python-dependencies` module, so flatpak-builder rebuilds that module when (and only when) a pin changes; otherwise it reuses its cached build.
+Both bundles install exactly the versions in `requirements.txt`, transitive dependencies included. In the x86_64 manifest the file is a source of the `python-dependencies` module, so flatpak-builder rebuilds that module when (and only when) a pin changes; otherwise it reuses its cached build. The versions of a running build are logged at startup and listed in *About → Troubleshooting*.
 
 ### Updating dependencies
 
