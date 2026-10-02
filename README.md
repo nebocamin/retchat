@@ -174,7 +174,7 @@ retchat/
 ## Tested with
 
 - Flatpak runtime `org.gnome.Platform//50` (GTK 4, Libadwaita 1.9)
-- Reticulum 1.5.4, LXMF 1.1.1, NomadNet 1.4.3
+- Reticulum 1.5.6, LXMF 1.2.0, NomadNet 1.4.4 (pinned in `requirements.txt`)
 - Phosh / narrow windows down to 360 px width
 
 ---

@@ -7,20 +7,20 @@
 # releases.
 
 # Reticulum stack
-rns==1.5.4
-lxmf==1.1.1
-nomadnet==1.4.3
+rns==1.5.6
+lxmf==1.2.0
+nomadnet==1.4.4
 
 # Used by Retchat directly
-msgpack==1.2.2
+msgpack==1.2.3
 pillow==12.3.0
 qrcode==8.2
 
 # Dependencies of the above
 cffi==2.1.1
-cryptography==50.0.1
+cryptography==50.0.2
 pycparser==3.0
 pyserial==3.5
 typing_extensions==4.16.0
-urwid==4.1.5
-wcwidth==0.8.4
+urwid==4.2.4
+wcwidth==0.9.1
