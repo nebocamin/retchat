@@ -37,6 +37,8 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   - Works with attachments from other LXMF clients (file attachments, images, voice messages).
 - **Discover peers on the mesh**
   - The *Entdecken* (discover) tab lists `lxmf.delivery` announces with display name, address and hop count.
+  - The list is updated every 5 seconds while it is shown, newest announce on top; while hidden it is not
+    touched and catches up when you open it.
   - Start a chat with a single click.
 - **Message sync**
   - Fetch messages that were stored for you on an LXMF propagation node while you were offline (main menu → *Nachrichten synchronisieren*).

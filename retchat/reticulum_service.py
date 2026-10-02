@@ -62,6 +62,8 @@ PROPAGATION_SIZE_LIMIT = 256_000
 
 # Seconds between saves of LXMF's outbound stamp costs (see _throttle_stamp_cost_saves)
 STAMP_COST_SAVE_INTERVAL = 60.0
+# Seconds announces are collected before the UI is told about them
+ANNOUNCE_BATCH_INTERVAL = 5.0
 
 
 def is_sendable_image(path: str) -> bool:
@@ -301,7 +303,7 @@ class ReticulumService:
         self._message_received_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._message_state_callbacks: List[Callable[[str, int], None]] = []
         self._message_id_callbacks: List[Callable[[str, str], None]] = []
-        self._announce_callbacks: List[Callable[[Dict[str, Any]], None]] = []
+        self._announce_callbacks: List[Callable[[List[Dict[str, Any]]], None]] = []
         self._path_resolved_callbacks: List[Callable[[str, int], None]] = []
         self._conversations_changed_callbacks: List[Callable[[], None]] = []
         self._reaction_callbacks: List[Callable[[str, str, List[Dict[str, Any]]], None]] = []
@@ -317,6 +319,10 @@ class ReticulumService:
         self._stamp_cost_router = None
         self._stamp_costs_dirty = False
         self._stamp_costs_saved_at = time.monotonic()
+        # Announces waiting for the next batch (see _dispatch_directory_announce)
+        self._announce_lock = threading.Lock()
+        self._announce_batch: Dict[str, Dict[str, Any]] = {}
+        self._announce_flush_scheduled = False
 
         # Ensure ~/.reticulum/config has TCP enabled as default, and enable_transport=False
         self._ensure_tcp_default_config()
@@ -585,9 +591,26 @@ class ReticulumService:
             }
             if kind == "node" and name:
                 self._node_names[dest_hex] = name
-            GLib.idle_add(self._notify_announce, data)
+            # Announces aren't needed in real time; collect them (newest per
+            # destination wins) and hand them to the UI in batches.
+            with self._announce_lock:
+                self._announce_batch[dest_hex] = data
+                schedule = not self._announce_flush_scheduled
+                self._announce_flush_scheduled = True
+            if schedule:
+                GLib.timeout_add(int(ANNOUNCE_BATCH_INTERVAL * 1000), self._flush_announces)
         except Exception as e:
             RNS.log(f"Retchat: Error dispatching announce: {e}", RNS.LOG_DEBUG)
+
+    def _flush_announces(self) -> bool:
+        with self._announce_lock:
+            batch = list(self._announce_batch.values())
+            self._announce_batch.clear()
+            self._announce_flush_scheduled = False
+        if batch:
+            batch.sort(key=lambda d: d["last_seen"])
+            self._notify_announces(batch)
+        return False
 
     # --- Identity & Profile ---
     @property
@@ -1468,7 +1491,9 @@ class ReticulumService:
         """cb(temporary_hash, lxmf_hash): a queued message was sent and got its final id."""
         self._message_id_callbacks.append(cb)
 
-    def add_announce_callback(self, cb: Callable[[Dict[str, Any]], None]):
+    def add_announce_callback(self, cb: Callable[[List[Dict[str, Any]]], None]):
+        """cb(announces): announces received since the last call, oldest first,
+        one per destination; called at most every ANNOUNCE_BATCH_INTERVAL."""
         self._announce_callbacks.append(cb)
 
     def add_path_resolved_callback(self, cb: Callable[[str, int], None]):
@@ -1523,10 +1548,10 @@ class ReticulumService:
                 RNS.log(f"Retchat: Error in message state callback: {e}", RNS.LOG_ERROR)
         return False
 
-    def _notify_announce(self, data: Dict[str, Any]) -> bool:
+    def _notify_announces(self, batch: List[Dict[str, Any]]) -> bool:
         for cb in self._announce_callbacks:
             try:
-                cb(data)
+                cb(batch)
             except Exception as e:
                 RNS.log(f"Retchat: Error in announce callback: {e}", RNS.LOG_ERROR)
         return False

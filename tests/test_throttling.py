@@ -26,6 +26,14 @@ class _FakeRouter:
 
 
 @pytest.fixture
+def timers(monkeypatch):
+    """Capture GLib.timeout_add instead of running a main loop."""
+    pending = []
+    monkeypatch.setattr(rs.GLib, "timeout_add", lambda ms, fn, *a: pending.append((ms, fn, a)) or len(pending))
+    return pending
+
+
+@pytest.fixture
 def service(tmp_path):
     svc = ReticulumService.__new__(ReticulumService)
     svc.db = Database(str(tmp_path / "test.db"))
@@ -73,3 +81,30 @@ def test_stamp_costs_saved_at_exit(service):
     service.app.message_router.update_stamp_cost(b"\x01" * 16, 8)
     service._save_stamp_costs(force=True)
     assert service.app.message_router.saves == 1
+
+
+def test_announces_batched_newest_per_destination(service, timers, monkeypatch):
+    monkeypatch.setattr(rs.RNS.Transport, "hops_to", lambda h: 2)
+    clock = iter(range(100, 200))
+    monkeypatch.setattr(rs.time, "time", lambda: float(next(clock)))
+    batches = []
+    service.add_announce_callback(batches.append)
+
+    service._dispatch_directory_announce(bytes.fromhex(PEER_A), b"Alice", "peer")
+    service._dispatch_directory_announce(bytes.fromhex(PEER_B), b"Node", "node")
+    service._dispatch_directory_announce(bytes.fromhex(PEER_A), b"Alice 2", "peer")
+
+    assert len(timers) == 1  # one flush for all of them
+    assert timers[0][0] == int(rs.ANNOUNCE_BATCH_INTERVAL * 1000)
+    assert batches == []
+
+    _ms, flush, args = timers[0]
+    assert flush(*args) is False
+    assert len(batches) == 1
+    batch = batches[0]
+    assert [d["destination_hash"] for d in batch] == [PEER_B, PEER_A]  # oldest first
+    assert batch[1]["display_name"] == "Alice 2"
+    assert service._node_names[PEER_B] == "Node"
+
+    service._dispatch_directory_announce(bytes.fromhex(PEER_A), b"Alice", "peer")
+    assert len(timers) == 2  # next batch scheduled again

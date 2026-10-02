@@ -45,6 +45,10 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.current_dest_hash: Optional[str] = None
         self.conv_rows: Dict[str, ConversationRow] = {}
         self.announce_rows: Dict[str, AnnounceRow] = {}
+        # The Discover list is only kept current while it is shown; otherwise
+        # it is marked stale and rebuilt when it appears again.
+        self._announces_stale = True
+        self._announce_query: Optional[str] = None  # search the list was built for
 
         # Toast Overlay
         self.toast_overlay = Adw.ToastOverlay()
@@ -96,13 +100,12 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.service.add_message_state_callback(self._on_service_message_state)
         self.service.add_message_id_callback(self.chat_view.replace_message_hash)
         self.service.add_reaction_callback(self._on_service_reaction)
-        self.service.add_announce_callback(self._on_service_announce_received)
+        self.service.add_announce_callback(self._on_service_announces_received)
         self.service.add_path_resolved_callback(self._on_service_path_resolved)
         self.service.add_conversations_changed_callback(self._on_service_conversations_changed)
 
-        # Initial data loading
+        # Initial data loading; the Discover list is built when first shown
         self._load_conversations()
-        self._load_announces()
 
     def _setup_actions(self):
         # Action: Copy Hash (win.copy_hash)
@@ -224,6 +227,11 @@ class RetchatWindow(Adw.ApplicationWindow):
 
         self.sidebar_stack = Gtk.Stack()
         self.sidebar_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        # Only measure the visible tab: a homogeneous stack measures the
+        # hidden list (up to 200 rows) on every change, too. The sidebar's
+        # width comes from the split view, so it doesn't jump between tabs.
+        self.sidebar_stack.set_hhomogeneous(False)
+        self.sidebar_stack.set_vhomogeneous(False)
         self.sidebar_stack.connect("notify::visible-child-name", self._on_sidebar_tab_changed)
         stack_switcher.set_stack(self.sidebar_stack)
         sidebar_box.append(stack_switcher)
@@ -284,6 +292,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.empty_announce_btn.connect("clicked", lambda _b: self._action_announce_self())
         self.announce_empty_page.set_child(self.empty_announce_btn)
         self.announce_list_box.set_placeholder(self.announce_empty_page)
+        # Shown again (tab switch, sidebar reopened in narrow mode): catch up.
+        self.announce_list_box.connect("map", lambda _w: self._refresh_announces_if_needed())
 
         announce_scroll.set_child(self.announce_list_box)
         self.sidebar_stack.add_titled(announce_scroll, "discover", "Entdecken")
@@ -377,7 +387,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         q = self.search_entry.get_text().strip()
         if active_tab == "discover":
             self.search_entry.set_placeholder_text("Peers & Ankündigungen durchsuchen...")
-            self._load_announces(query=q if q else None)
+            self._refresh_announces_if_needed()
         else:
             self.search_entry.set_placeholder_text("Chats durchsuchen...")
             self._load_conversations(query=q if q else None)
@@ -488,6 +498,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         announces = self.service.get_announces(query=query)
         _remove_rows(self.announce_list_box)
         self.announce_rows.clear()
+        self._announces_stale = False
+        self._announce_query = query
 
         if query:
             self.announce_empty_page.set_title("Keine Peers gefunden")
@@ -506,6 +518,14 @@ class RetchatWindow(Adw.ApplicationWindow):
             row = AnnounceRow(ann)
             self.announce_rows[ann["destination_hash"]] = row
             self.announce_list_box.append(row)
+
+    def _refresh_announces_if_needed(self):
+        """Rebuild the Discover list if it is shown and out of date."""
+        if not self.announce_list_box.get_mapped():
+            return
+        q = self.search_entry.get_text().strip() or None
+        if self._announces_stale or q != self._announce_query:
+            self._load_announces(query=q)
 
     def _trim_announce_rows(self):
         """Drop the oldest rows beyond MAX_ANNOUNCE_ROWS (new announces are prepended)."""
@@ -573,20 +593,32 @@ class RetchatWindow(Adw.ApplicationWindow):
         if self.current_dest_hash == conversation_hash:
             self.chat_view.update_reactions(message_hash, reactions)
 
-    def _on_service_announce_received(self, announce_data: Dict[str, Any]):
-        dest_hash = announce_data["destination_hash"].lower()
-        active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
-        q = self.search_entry.get_text().strip()
-        if active_tab == "discover" and q:
+    def _on_service_announces_received(self, announces: List[Dict[str, Any]]):
+        """A batch of announces (oldest first, one per destination)."""
+        if not self.announce_list_box.get_mapped():
+            # Hidden tab or sidebar: no widget work, rebuild when shown.
+            self._announces_stale = True
+            return
+        q = self.search_entry.get_text().strip() or None
+        if self._announces_stale or q or q != self._announce_query:
+            # Out of date, or a search is shown (matching and order need the
+            # whole stream): rebuild, at most once per batch.
             self._load_announces(query=q)
-        else:
-            if dest_hash in self.announce_rows:
-                self.announce_rows[dest_hash].update_data(announce_data)
+            return
+        # Newest last, so it ends up on top; announced again = moved to the top.
+        for data in announces:
+            dest_hash = data["destination_hash"].lower()
+            row = self.announce_rows.get(dest_hash)
+            if row is not None:
+                row.update_data(data)
+                if row.get_index() != 0:
+                    self.announce_list_box.remove(row)
+                    self.announce_list_box.prepend(row)
             else:
-                row = AnnounceRow(announce_data)
+                row = AnnounceRow(data)
                 self.announce_rows[dest_hash] = row
                 self.announce_list_box.prepend(row)
-                self._trim_announce_rows()
+        self._trim_announce_rows()
 
     def _on_service_path_resolved(self, dest_hex: str, hops: int):
         dest_hex = dest_hex.lower()
