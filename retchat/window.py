@@ -555,9 +555,11 @@ class RetchatWindow(Adw.ApplicationWindow):
         self._open_chat_with(dest_hash)
 
     # --- Sending Messages ---
-    def _on_send_message(self, dest_hash: str, content: str, attachment_path: Optional[str] = None):
+    def _on_send_message(self, dest_hash: str, content: str, attachment_path: Optional[str] = None,
+                         reply_to: Optional[str] = None):
         try:
-            msg_data = self.service.send_message(dest_hash, content, attachment_path=attachment_path)
+            msg_data = self.service.send_message(dest_hash, content, attachment_path=attachment_path,
+                                                 reply_to=reply_to)
             self.chat_view.append_message(msg_data)
 
             # Update conversation list

@@ -268,6 +268,9 @@ def test_lxmf_api():
     assert LXMF.display_name_from_app_data(umsgpack.packb([b"Alice", 8])) == "Alice"
     for name in ("FIELD_IMAGE", "FIELD_FILE_ATTACHMENTS"):
         assert isinstance(getattr(LXMF, name), int)
+    # Wire values other clients use; Retchat falls back to them if LXMF lacks the names
+    assert (LXMF.FIELD_REPLY_TO, LXMF.FIELD_REPLY_QUOTE, LXMF.FIELD_REACTION) == (0x30, 0x31, 0x40)
+    assert (LXMF.REACTION_TO, LXMF.REACTION_CONTENT) == (0x00, 0x01)
     for state in ("GENERATING", "OUTBOUND", "SENDING", "SENT", "DELIVERED", "FAILED", "REJECTED", "CANCELLED"):
         assert isinstance(getattr(LXMF.LXMessage, state), int)
 

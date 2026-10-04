@@ -26,6 +26,9 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
 
 - **Direct messages over LXMF**
   - Live delivery status for sent messages: sending, sent to a propagation node (✓), delivered (✓✓), failed.
+  - Reply to a message (hover button, right click or long press); the reply shows the quoted message, a click jumps
+    to it. Uses the LXMF standard fields (`FIELD_REPLY_TO`, `FIELD_REPLY_QUOTE`), compatible with MeshChatX.
+  - React to received messages with emoji (LXMF `FIELD_REACTION`).
   - Rename contacts, copy their address, request a path through the mesh.
   - Delete chats from the chat menu, or by right click / long press in the chat list.
 - **Images and files**

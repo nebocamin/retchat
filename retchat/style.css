@@ -127,6 +127,42 @@ listview.chat-history > row {
     opacity: 1;
 }
 
+/* Replies: the quoted message at the top of a bubble, and in the composer */
+.reply-quote {
+    padding: 3px 8px 4px 8px;
+    border-radius: 8px;
+    border-left: 3px solid @accent_color;
+    background-color: alpha(currentColor, 0.06);
+}
+
+.reply-author {
+    font-size: 0.8em;
+    font-weight: bold;
+    color: @accent_color;
+}
+
+.reply-text {
+    font-size: 0.88em;
+    opacity: 0.8;
+}
+
+.message-bubble.has-image .reply-quote {
+    margin: 0 0 2px 0;
+}
+
+/* Briefly, after jumping to a message from a reply. An animation, not a
+ * transition on .message-bubble: that would also animate every bubble on
+ * theme changes. */
+@keyframes reply-highlight {
+    from { box-shadow: 0 0 0 3px alpha(@accent_color, 0.8); }
+    60%  { box-shadow: 0 0 0 3px alpha(@accent_color, 0.8); }
+    to   { box-shadow: 0 0 0 3px alpha(@accent_color, 0); }
+}
+
+.message-bubble.highlighted {
+    animation: reply-highlight 1.5s ease-out;
+}
+
 .reaction-popover > contents {
     padding: 4px;
 }

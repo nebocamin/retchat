@@ -183,6 +183,57 @@ def reaction_fields(target_hash: str, emoji: str) -> Dict[int, Any]:
     return {FIELD_REACTION: {REACTION_TO: bytes.fromhex(target_hash), REACTION_CONTENT: emoji.encode("utf-8")}}
 
 
+# --- Replies ----------------------------------------------------------------------
+#
+# A reply is a normal message with
+#   fields[FIELD_REPLY_TO]    = <full LXMessage.hash of the message replied to>
+#   fields[FIELD_REPLY_QUOTE] = <quoted text, UTF-8>
+# (LXMF standard, also used by MeshChatX). The quote lets clients show what
+# was replied to without having the original. Older Columba versions put
+# "reply_to" (hex) into their app extensions dict, fields[0x10]; accepted on
+# receipt only.
+FIELD_REPLY_TO = getattr(LXMF, "FIELD_REPLY_TO", 0x30)
+FIELD_REPLY_QUOTE = getattr(LXMF, "FIELD_REPLY_QUOTE", 0x31)
+# Characters of the original sent as quote: short, so that a short reply
+# still fits into a single packet.
+MAX_REPLY_QUOTE = 140
+# Received quotes are shown in two lines at most; keep no more than this.
+MAX_SHOWN_QUOTE = 300
+
+
+def _clean_quote(value: Any, limit: int) -> str:
+    if isinstance(value, (bytes, bytearray)):
+        value = bytes(value).decode("utf-8", errors="replace")
+    if not isinstance(value, str):
+        return ""
+    # Control characters except line breaks
+    value = "".join(c for c in value if c in "\n\t" or unicodedata.category(c) != "Cc").strip()
+    return value if len(value) <= limit else value[:limit - 1].rstrip() + "…"
+
+
+def parse_reply(fields: Any) -> Optional[Tuple[str, str]]:
+    """(target message hash, quote) if ``fields`` mark a reply; the quote may be empty."""
+    if not isinstance(fields, dict):
+        return None
+    target = _message_hash_hex(fields.get(FIELD_REPLY_TO))
+    if target:
+        return target, _clean_quote(fields.get(FIELD_REPLY_QUOTE), MAX_SHOWN_QUOTE)
+    legacy = fields.get(FIELD_REACTION_LEGACY)
+    if isinstance(legacy, dict):
+        target = _message_hash_hex(_get_key(legacy, "reply_to"))
+        if target:
+            return target, ""
+    return None
+
+
+def reply_fields(target_hash: str, quote: str) -> Dict[int, Any]:
+    fields: Dict[int, Any] = {FIELD_REPLY_TO: bytes.fromhex(target_hash)}
+    quote = _clean_quote(quote, MAX_REPLY_QUOTE)
+    if quote:
+        fields[FIELD_REPLY_QUOTE] = quote.encode("utf-8")
+    return fields
+
+
 def summarize_reactions(rows: List[Dict[str, Any]], own_hash: str) -> Dict[str, List[Dict[str, Any]]]:
     """Reaction rows (oldest first) grouped per target message.
 
@@ -354,8 +405,8 @@ class ReticulumService:
         self.app = _RetchatApp(self, configdir=self._configdir, rnsconfigdir=self._rnsconfigdir)
 
         self._conv_cache: Dict[str, Conversation] = {}
-        # dest hash -> queued (content, attachment path, temporary message hash)
-        self._pending: Dict[str, List[Tuple[str, Optional[str], str]]] = {}
+        # dest hash -> queued (content, attachment path, reply-to hash, temporary message hash)
+        self._pending: Dict[str, List[Tuple[str, Optional[str], Optional[str], str]]] = {}
 
         # Hook announce logger on app.directory to dispatch announces without extra overhead
         self._hook_directory_announces()
@@ -1074,6 +1125,9 @@ class ReticulumService:
                 hops = 0  # LXMF messages don't carry a hop count
                 state = map_lxmf_state_to_ui(raw_state, is_outgoing)
                 info = self._attachment_info(self._attachments(msg_hash, m))
+                # Fields aren't in NomadNet's index, this reads the message
+                # file (~0.02 ms per message; released below).
+                reply = parse_reply(m.get_fields())
 
                 out.append({
                     "message_hash": msg_hash,
@@ -1086,6 +1140,8 @@ class ReticulumService:
                     "timestamp": ts,
                     "state": state,
                     "hops": hops,
+                    "reply_to": reply[0] if reply else None,
+                    "reply_quote": reply[1] if reply else "",
                     **info,
                 })
             except Exception as e:
@@ -1228,11 +1284,17 @@ class ReticulumService:
                     _release(m)
         return ""
 
-    def send_message(self, dest_hex: str, content: str, attachment_path: Optional[str] = None) -> Dict[str, Any]:
-        """Send a message, optionally with an image or any other file (see _prepare_attachment)."""
+    def send_message(self, dest_hex: str, content: str, attachment_path: Optional[str] = None,
+                     reply_to: Optional[str] = None) -> Dict[str, Any]:
+        """Send a message, optionally with an image or any other file (see
+        _prepare_attachment) and as reply to the message ``reply_to`` (hash)."""
         dest_hex = dest_hex.strip().lower()
         if len(dest_hex) != 32:
             raise ValueError("Ungültige Zieladresse: Muss ein 32-Zeichen Hex-Hash sein.")
+        if reply_to is not None:
+            reply_to = reply_to.strip().lower()
+            if not _HEX_MSG_RE.fullmatch(reply_to):
+                raise ValueError("Auf diese Nachricht kann nicht geantwortet werden")
 
         conv = self.conversation(dest_hex)
         now = time.time()
@@ -1241,6 +1303,10 @@ class ReticulumService:
         info = self._attachment_info([])
         if attachment_path:
             fields, info = self._prepare_attachment(attachment_path)
+        reply_quote = ""
+        if reply_to is not None:
+            reply_quote = _clean_quote(self._reply_quote(dest_hex, reply_to), MAX_REPLY_QUOTE)
+            fields = {**(fields or {}), **reply_fields(reply_to, reply_quote)}
 
         msg_hash = None
         if self.peer_known(dest_hex):
@@ -1268,7 +1334,7 @@ class ReticulumService:
             # (flush_pending), then report the final hash via the message id
             # callbacks so the shown bubble can follow the delivery state.
             msg_hash = f"out_{os.urandom(8).hex()}"
-            self._pending.setdefault(dest_hex, []).append((content, attachment_path, msg_hash))
+            self._pending.setdefault(dest_hex, []).append((content, attachment_path, reply_to, msg_hash))
             Conversation.query_for_peer(dest_hex)
 
         hops = 0
@@ -1289,8 +1355,24 @@ class ReticulumService:
             "timestamp": now,
             "state": STATE_SENDING,
             "hops": hops,
+            "reply_to": reply_to,
+            "reply_quote": reply_quote,
             **info,
         }
+
+    def _reply_quote(self, conversation_hash: str, message_hash: str) -> str:
+        """Text of a message as quoted in a reply (attachments as in the chat list)."""
+        for m in self.conversation(conversation_hash).messages:
+            h = m.get_hash()
+            if h and h.hex() == message_hash:
+                try:
+                    text = (m.get_content() or "").strip()
+                    return self._preview_text(text, self._attachment_info(self._attachments(message_hash, m)))
+                except Exception:
+                    return ""
+                finally:
+                    _release(m)
+        return ""
 
     def peer_known(self, dest_hex: str) -> bool:
         try:
@@ -1307,9 +1389,9 @@ class ReticulumService:
                 Conversation.query_for_peer(dest_hex)
                 continue
             queued = self._pending.pop(dest_hex)
-            for content, img_p, temp_hash in queued:
+            for content, img_p, reply_to, temp_hash in queued:
                 try:
-                    result = self.send_message(dest_hex, content, attachment_path=img_p)
+                    result = self.send_message(dest_hex, content, attachment_path=img_p, reply_to=reply_to)
                     if result["message_hash"] != temp_hash:
                         GLib.idle_add(self._notify_message_id, temp_hash, result["message_hash"])
                 except Exception as e:
@@ -1514,6 +1596,7 @@ class ReticulumService:
                 hops = 0
 
             info = self._attachment_info(self._attachments(msg_hash, message))
+            reply = parse_reply(message.fields)
 
             self._trigger_notification(source_hash, self._preview_text(content, info))
 
@@ -1527,6 +1610,8 @@ class ReticulumService:
                 "timestamp": message.timestamp or time.time(),
                 "state": STATE_DELIVERED,
                 "hops": hops,
+                "reply_to": reply[0] if reply else None,
+                "reply_quote": reply[1] if reply else "",
                 **info,
             }
 

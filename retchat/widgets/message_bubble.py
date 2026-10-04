@@ -3,7 +3,7 @@
 import datetime
 import functools
 import os
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -65,9 +65,14 @@ def linkify(text: str) -> Optional[str]:
     return "".join(out)
 
 
+def can_reply(item: MessageItem) -> bool:
+    """Replies need the message's LXMF hash (not yet known while queued)."""
+    return len(item.message_hash) == 64
+
+
 def can_react(item: MessageItem) -> bool:
     """Reactions are possible on received messages with a real LXMF hash."""
-    return not item.is_outgoing and len(item.message_hash) == 64
+    return not item.is_outgoing and can_reply(item)
 
 
 class MessageBubble(Gtk.Box):
@@ -76,57 +81,91 @@ class MessageBubble(Gtk.Box):
     The widget tree is built once; ``bind()`` fills it with the data of an item
     and ``unbind()`` releases it again, so Gtk.ListView can recycle rows.
 
-    Received messages can be reacted to via the smiley button next to the
-    bubble (shown on hover), a right click or a long press on the bubble;
-    these call ``on_react_requested(item, widget, x, y)`` to open the picker
-    pointing at (x, y) in ``widget``. Reaction chips below the bubble react
-    with the same emoji through the ``chat.react`` action.
+    The message menu (quick reactions for received messages, reply, copy)
+    opens with the smiley button next to the bubble (shown on hover), a
+    right click or a long press on the bubble; these call
+    ``on_menu_requested(item, widget, x, y)`` to open it pointing at (x, y)
+    in ``widget``. The reply button next to it calls
+    ``on_reply_requested(item)``. Reaction chips below the bubble react with
+    the same emoji through the ``chat.react`` action.
+
+    A reply shows the message it refers to above the text, as returned by
+    ``resolve_reply(item)``: (author, text, the original is in the chat).
+    Clicking it calls ``on_quote_clicked(item)``.
     """
 
     def __init__(
         self,
         on_image_clicked: Optional[Callable[[MessageItem], None]] = None,
-        on_react_requested: Optional[Callable[[MessageItem, Gtk.Widget, float, float], None]] = None,
+        on_menu_requested: Optional[Callable[[MessageItem, Gtk.Widget, float, float], None]] = None,
         peer_name: Optional[Callable[[], str]] = None,
+        on_reply_requested: Optional[Callable[[MessageItem], None]] = None,
+        resolve_reply: Optional[Callable[[MessageItem], Tuple[str, str, bool]]] = None,
+        on_quote_clicked: Optional[Callable[[MessageItem], None]] = None,
     ):
         super().__init__(spacing=4)
         self.add_css_class("message-row")
         self._on_image_clicked = on_image_clicked
-        self._on_react_requested = on_react_requested
+        self._on_menu_requested = on_menu_requested
+        self._on_reply_requested = on_reply_requested
+        self._resolve_reply = resolve_reply
+        self._on_quote_clicked = on_quote_clicked
         self._peer_name = peer_name
         self._item: Optional[MessageItem] = None
         self._state_handler = 0
         self._reactions_handler = 0
+        self._highlight_handler = 0
+        self._quote_jumpable = False
 
-        column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.append(column)
+        self.column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.append(self.column)
 
         self.bubble = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.bubble.add_css_class("message-bubble")
-        column.append(self.bubble)
+        self.column.append(self.bubble)
+
+        # Quoted message of a reply
+        self.quote_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, visible=False)
+        self.quote_box.add_css_class("reply-quote")
+        self.quote_author = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        self.quote_author.add_css_class("reply-author")
+        self.quote_box.append(self.quote_author)
+        self.quote_text = Gtk.Label(xalign=0.0, wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR,
+                                    lines=2, ellipsize=Pango.EllipsizeMode.END)
+        self.quote_text.add_css_class("reply-text")
+        self.quote_box.append(self.quote_text)
+        quote_click = Gtk.GestureClick()
+        quote_click.connect("released", self._on_quote_released)
+        self.quote_box.add_controller(quote_click)
+        self.bubble.append(self.quote_box)
 
         # Reaction chips, overlapping the lower edge of the bubble
         self.reactions_box = Gtk.Box(spacing=4, visible=False)
         self.reactions_box.add_css_class("message-reactions")
-        column.append(self.reactions_box)
+        self.column.append(self.reactions_box)
 
-        self.react_btn = Gtk.Button(icon_name="face-smile-symbolic", tooltip_text="Reagieren",
-                                    valign=Gtk.Align.CENTER)
-        for css in ("flat", "circular", "react-button"):
-            self.react_btn.add_css_class(css)
+        # Hover buttons; on the side facing the middle of the chat
+        self.actions_box = Gtk.Box(valign=Gtk.Align.CENTER)
+        self.reply_btn = Gtk.Button(icon_name="mail-reply-sender-symbolic", tooltip_text="Antworten")
+        self.react_btn = Gtk.Button(icon_name="face-smile-symbolic", tooltip_text="Reagieren")
+        for btn in (self.reply_btn, self.react_btn):
+            for css in ("flat", "circular", "react-button"):
+                btn.add_css_class(css)
+            self.actions_box.append(btn)
+        self.reply_btn.connect("clicked", self._on_reply_clicked)
         self.react_btn.connect("clicked", self._on_react_clicked)
-        self.append(self.react_btn)
+        self.append(self.actions_box)
 
-        # Right click (mouse) or long press (touch) on a received message opens
-        # the reaction picker. Capture phase: the text label would otherwise
-        # show its own context menu or start a selection.
+        # Right click (mouse) or long press (touch) opens the message menu.
+        # Capture phase: the text label would otherwise show its own context
+        # menu or start a selection.
         right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
         right_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        right_click.connect("pressed", lambda g, _n, x, y: self._on_react_gesture(g, x, y))
+        right_click.connect("pressed", lambda g, _n, x, y: self._on_menu_gesture(g, x, y))
         self.bubble.add_controller(right_click)
         long_press = Gtk.GestureLongPress(touch_only=True)
         long_press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
-        long_press.connect("pressed", self._on_react_gesture)
+        long_press.connect("pressed", self._on_menu_gesture)
         self.bubble.add_controller(long_press)
 
         # Image attachment
@@ -188,6 +227,13 @@ class MessageBubble(Gtk.Box):
         self.set_css_classes(["message-row", "outgoing" if outgoing else "incoming"])
         self.reactions_box.set_halign(Gtk.Align.END if outgoing else Gtk.Align.START)
         self.react_btn.set_visible(can_react(item))
+        self.reply_btn.set_visible(can_reply(item))
+        if outgoing:
+            self.reorder_child_after(self.actions_box, None)
+        else:
+            self.reorder_child_after(self.actions_box, self.column)
+
+        self._bind_quote(item)
 
         self._bind_image(item)
         has_image = self.picture.get_visible() or self.image_error.get_visible()
@@ -198,6 +244,8 @@ class MessageBubble(Gtk.Box):
         classes = ["message-bubble", "outgoing" if outgoing else "incoming"]
         if has_image:
             classes.append("has-image")
+        if item.highlighted:
+            classes.append("highlighted")
         self.bubble.set_css_classes(classes)
 
         text = item.content or ("" if has_image or item.files else "[Leere Nachricht]")
@@ -217,19 +265,48 @@ class MessageBubble(Gtk.Box):
         self._update_state()
         self._reactions_handler = item.connect("notify::reactions", lambda *_: self._update_reactions())
         self._update_reactions()
+        self._highlight_handler = item.connect("notify::highlighted", lambda *_: self._update_highlight())
 
     def unbind(self):
         if self._item is not None:
-            for handler in (self._state_handler, self._reactions_handler):
+            for handler in (self._state_handler, self._reactions_handler, self._highlight_handler):
                 if handler:
                     self._item.disconnect(handler)
         self._item = None
         self._state_handler = 0
         self._reactions_handler = 0
+        self._highlight_handler = 0
         self.picture.set_paintable(None)
         while child := self.files_box.get_first_child():
             self.files_box.remove(child)
         self._clear_reactions()
+
+    def _bind_quote(self, item: MessageItem):
+        if not item.reply_to or self._resolve_reply is None:
+            self.quote_box.set_visible(False)
+            self._quote_jumpable = False
+            return
+        author, text, jumpable = self._resolve_reply(item)
+        self.quote_author.set_text(author)
+        self.quote_text.set_text(text)
+        self.quote_text.set_visible(bool(text))
+        self._quote_jumpable = jumpable
+        self.quote_box.set_cursor(Gdk.Cursor.new_from_name("pointer", None) if jumpable else None)
+        self.quote_box.set_tooltip_text("Zur ursprünglichen Nachricht" if jumpable else None)
+        self.quote_box.set_visible(True)
+
+    def _update_highlight(self):
+        if self._item is None:
+            return
+        if self._item.highlighted:
+            self.bubble.add_css_class("highlighted")
+        else:
+            self.bubble.remove_css_class("highlighted")
+
+    def _on_quote_released(self, gesture, _n_press, _x, _y):
+        if self._item is not None and self._quote_jumpable and self._on_quote_clicked:
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self._on_quote_clicked(self._item)
 
     def _clear_reactions(self):
         while child := self.reactions_box.get_first_child():
@@ -327,15 +404,19 @@ class MessageBubble(Gtk.Box):
         return True
 
     def _on_react_clicked(self, button: Gtk.Button):
-        if self._item is not None and self._on_react_requested:
-            self._on_react_requested(self._item, button, button.get_width() / 2, button.get_height() / 2)
+        if self._item is not None and self._on_menu_requested:
+            self._on_menu_requested(self._item, button, button.get_width() / 2, button.get_height() / 2)
 
-    def _on_react_gesture(self, gesture: Gtk.Gesture, x: float, y: float):
+    def _on_reply_clicked(self, _button: Gtk.Button):
+        if self._item is not None and self._on_reply_requested:
+            self._on_reply_requested(self._item)
+
+    def _on_menu_gesture(self, gesture: Gtk.Gesture, x: float, y: float):
         item = self._item
-        if item is None or not can_react(item) or not self._on_react_requested:
-            return  # own message: keep the text label's context menu
+        if item is None or not self._on_menu_requested or not (can_reply(item) or item.content):
+            return  # nothing to offer: keep the text label's context menu
         gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-        self._on_react_requested(item, self.bubble, x, y)
+        self._on_menu_requested(item, self.bubble, x, y)
 
     @staticmethod
     def _format_time(timestamp: float) -> str:

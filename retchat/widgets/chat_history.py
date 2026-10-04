@@ -101,6 +101,20 @@ class ChatHistory(Adw.Bin):
         if self._stick_to_bottom:
             self.scroll_to_bottom()
 
+    def scroll_to_item(self, item: GObject.Object) -> bool:
+        """Bring ``item`` into view (e.g. the message a reply refers to)."""
+        found, position = self.store.find(item)
+        if not found:
+            return False
+        # Leave the bottom: re-anchoring would otherwise scroll back down.
+        self._stick_to_bottom = False
+        if self._rescroll_source:
+            GLib.source_remove(self._rescroll_source)
+            self._rescroll_source = 0
+        self.list_view.scroll_to(position, Gtk.ListScrollFlags.NONE, Gtk.ScrollInfo())
+        self.scroll_down_btn.set_visible(position < self.store.get_n_items() - 1)
+        return True
+
     def scroll_to_bottom(self):
         self._stick_to_bottom = True
         self.scroll_down_btn.set_visible(False)

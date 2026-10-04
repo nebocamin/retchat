@@ -1,7 +1,7 @@
 """Chat view for direct LXMF conversations: message history and composer."""
 
 import os
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import gi
 gi.require_version('Gtk', '4.0')
@@ -13,11 +13,22 @@ from retchat.models import MessageItem
 from retchat.reticulum_service import MAX_ATTACHMENT_SIZE, PROPAGATION_SIZE_LIMIT, is_sendable_image
 from retchat.widgets.attachment_row import file_icon, is_executable, named_copy
 from retchat.widgets.chat_history import CONTENT_MAX_WIDTH, ChatHistory
-from retchat.widgets.message_bubble import MessageBubble, load_thumbnail
+from retchat.widgets.message_bubble import MessageBubble, can_react, can_reply, load_thumbnail
 
 
-# Offered directly in the reaction popover; everything else via the emoji chooser.
+# Offered directly in the message menu; everything else via the emoji chooser.
 QUICK_REACTIONS = ("👍", "❤️", "😂", "😮", "😢", "🙏")
+# Seconds a message stays highlighted after jumping to it from a reply
+HIGHLIGHT_SECONDS = 1.5
+
+
+def message_preview(item: MessageItem) -> str:
+    """Text of a message as shown in a quote (attachments as in the chat list)."""
+    if item.image_path:
+        return f"📷 {item.content}" if item.content else "📷 Bild"
+    if item.files:
+        return f"📎 {item.content}" if item.content else f"📎 {item.files[0]['name']}"
+    return item.content
 
 
 class ChatView(Adw.Bin):
@@ -26,7 +37,7 @@ class ChatView(Adw.Bin):
     def __init__(
         self,
         on_back_clicked: Callable[[], None],
-        on_send_message: Callable[[str, str, Optional[str]], None],
+        on_send_message: Callable[[str, str, Optional[str], Optional[str]], None],
         on_send_reaction: Optional[Callable[[str, str, str], None]] = None,
     ):
         super().__init__(hexpand=True, vexpand=True)
@@ -37,16 +48,23 @@ class ChatView(Adw.Bin):
         self.current_dest_hash: Optional[str] = None
         self.current_conv_data: Optional[Dict[str, Any]] = None
         self.pending_attachment_path: Optional[str] = None
-        # Message the open reaction popover / emoji chooser refers to
+        # Message the composer replies to
+        self.reply_target: Optional[str] = None
+        # Message the open message menu / emoji chooser refers to
         self._reaction_target: Optional[str] = None
+        self._highlight_source = 0
+        self._highlighted: Optional[MessageItem] = None
 
         self._items: Dict[str, MessageItem] = {}
         self.history = ChatHistory(
             MessageItem,
             lambda: MessageBubble(
                 on_image_clicked=self._on_image_clicked,
-                on_react_requested=self._show_reaction_picker,
+                on_menu_requested=self._show_message_menu,
                 peer_name=self._peer_name,
+                on_reply_requested=lambda item: self.start_reply(item.message_hash),
+                resolve_reply=self._resolve_reply,
+                on_quote_clicked=lambda item: self.jump_to_message(item.reply_to),
             ),
         )
 
@@ -108,6 +126,28 @@ class ChatView(Adw.Bin):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
         box.add_css_class("composer")
 
+        # Reply bar: the message being replied to
+        self.reply_box = Gtk.Box(spacing=8, visible=False)
+        self.reply_box.add_css_class("attachment-chip")
+        self.reply_box.add_css_class("reply-chip")
+        self.reply_box.append(Gtk.Image(icon_name="mail-reply-sender-symbolic", valign=Gtk.Align.CENTER,
+                                        margin_start=4))
+        reply_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+        self.reply_author = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END)
+        self.reply_author.add_css_class("reply-author")
+        reply_text.append(self.reply_author)
+        self.reply_preview = Gtk.Label(xalign=0.0, ellipsize=Pango.EllipsizeMode.END, single_line_mode=True)
+        self.reply_preview.add_css_class("reply-text")
+        reply_text.append(self.reply_preview)
+        self.reply_box.append(reply_text)
+        cancel_reply_btn = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Antwort abbrechen (Esc)",
+                                      valign=Gtk.Align.CENTER)
+        cancel_reply_btn.add_css_class("flat")
+        cancel_reply_btn.add_css_class("circular")
+        cancel_reply_btn.connect("clicked", lambda _b: self.cancel_reply())
+        self.reply_box.append(cancel_reply_btn)
+        box.append(self.reply_box)
+
         # Attachment preview chip: image thumbnail or file type icon, name and size
         self.preview_box = Gtk.Box(spacing=8, visible=False)
         self.preview_box.add_css_class("attachment-chip")
@@ -146,6 +186,9 @@ class ChatView(Adw.Bin):
         self.entry = Gtk.Entry(placeholder_text="Nachricht", hexpand=True, valign=Gtk.Align.CENTER)
         self.entry.connect("activate", lambda _e: self._send())
         self.entry.connect("changed", lambda _e: self._update_send_sensitivity())
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._on_entry_key)
+        self.entry.add_controller(keys)
         row.append(self.entry)
 
         self.send_btn = Gtk.Button(icon_name="mail-send-symbolic", tooltip_text="Senden (Enter)",
@@ -168,19 +211,30 @@ class ChatView(Adw.Bin):
         self.reaction_popover = Gtk.Popover()
         self.reaction_popover.add_css_class("reaction-popover")
         box = Gtk.Box(spacing=2)
+        # Reactions (received messages only)
+        self._reaction_choices = Gtk.Box(spacing=2)
+        box.append(self._reaction_choices)
         for emoji in QUICK_REACTIONS:
             btn = Gtk.Button(label=emoji, tooltip_text=f"Mit {emoji} reagieren")
             btn.add_css_class("flat")
             btn.add_css_class("reaction-choice")
             btn.connect("clicked", lambda _b, e=emoji: self._pick_reaction(e))
-            box.append(btn)
+            self._reaction_choices.append(btn)
         more_btn = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="Weitere Emojis",
                               valign=Gtk.Align.CENTER)
         more_btn.add_css_class("flat")
         more_btn.add_css_class("circular")
         more_btn.connect("clicked", lambda _b: self._show_emoji_chooser())
-        box.append(more_btn)
-        box.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=2, margin_end=2))
+        self._reaction_choices.append(more_btn)
+        self._reaction_choices.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL,
+                                                    margin_start=2, margin_end=2))
+        reply_btn = Gtk.Button(icon_name="mail-reply-sender-symbolic", tooltip_text="Antworten",
+                               valign=Gtk.Align.CENTER)
+        reply_btn.add_css_class("flat")
+        reply_btn.add_css_class("circular")
+        reply_btn.connect("clicked", lambda _b: self._reply_to_menu_target())
+        box.append(reply_btn)
+        self._menu_reply_btn = reply_btn
         copy_btn = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Text kopieren",
                               valign=Gtk.Align.CENTER)
         copy_btn.add_css_class("flat")
@@ -218,6 +272,8 @@ class ChatView(Adw.Bin):
     def clear(self):
         """Forget the shown conversation (e.g. after it was deleted)."""
         self._close_reaction_picker()
+        self.cancel_reply()
+        self._clear_highlight()
         self.current_dest_hash = None
         self.current_conv_data = None
         self._items = {}
@@ -260,6 +316,8 @@ class ChatView(Adw.Bin):
     def load_conversation(self, conv_data: Dict[str, Any], messages: List[Dict[str, Any]]):
         """Replace the shown conversation and jump to the newest message."""
         self._close_reaction_picker()
+        self.cancel_reply()
+        self._clear_highlight()
         self.current_conv_data = conv_data
         self.current_dest_hash = conv_data["destination_hash"].lower()
         self._clear_pending_attachment()
@@ -317,13 +375,68 @@ class ChatView(Adw.Bin):
     def _send(self):
         text = self.entry.get_text().strip()
         attachment = self.pending_attachment_path
+        reply_to = self.reply_target
         if not self.current_dest_hash or (not text and not attachment):
             return
         self.entry.set_text("")
         self._clear_pending_attachment()
+        self.cancel_reply()
         # Jump to the end and stick there, so the own message is followed.
         self.history.scroll_to_bottom()
-        self._on_send_message(self.current_dest_hash, text, attachment)
+        self._on_send_message(self.current_dest_hash, text, attachment, reply_to)
+
+    # --- Replies ------------------------------------------------------------------
+
+    def start_reply(self, message_hash: str):
+        """Reply to a shown message with the next sent message."""
+        item = self._items.get(message_hash)
+        if item is None or not can_reply(item):
+            return
+        self.reply_target = message_hash
+        self.reply_author.set_text("Antwort auf deine Nachricht" if item.is_outgoing
+                                   else f"Antwort an {self._peer_name() or 'Kontakt'}")
+        self.reply_preview.set_text(" ".join(message_preview(item).split()))
+        self.reply_box.set_visible(True)
+        self.entry.grab_focus()
+
+    def cancel_reply(self):
+        self.reply_target = None
+        self.reply_box.set_visible(False)
+
+    def _on_entry_key(self, _controller, keyval: int, _keycode: int, _state) -> bool:
+        if keyval == Gdk.KEY_Escape and self.reply_target is not None:
+            self.cancel_reply()
+            return True
+        return False
+
+    def _resolve_reply(self, item: MessageItem) -> Tuple[str, str, bool]:
+        """(author, text, the original is shown) of the message ``item`` replies to."""
+        original = self._items.get(item.reply_to)
+        if original is not None:
+            author = "Du" if original.is_outgoing else (self._peer_name() or "Kontakt")
+            return author, message_preview(original), True
+        if item.reply_quote:
+            return "Zitat", item.reply_quote, False
+        return "Antwort", "Ursprüngliche Nachricht nicht verfügbar", False
+
+    def jump_to_message(self, message_hash: str):
+        """Scroll to a shown message and highlight it briefly."""
+        item = self._items.get(message_hash)
+        if item is None or not self.history.scroll_to_item(item):
+            return
+        self._clear_highlight()
+        item.highlighted = True
+        self._highlighted = item
+        self._highlight_source = GLib.timeout_add(int(HIGHLIGHT_SECONDS * 1000), self._clear_highlight)
+
+    def _clear_highlight(self) -> bool:
+        if self._highlight_source:
+            GLib.source_remove(self._highlight_source)
+            self._highlight_source = 0
+        if self._highlighted is not None:
+            self._highlighted.highlighted = False
+            self._highlighted = None
+        return False
 
     def _set_pending_attachment(self, file_path: str):
         try:
@@ -436,8 +549,8 @@ class ChatView(Adw.Bin):
         dest = self.current_dest_hash or ""
         return conv.get("custom_name") or conv.get("display_name") or (f"{dest[:8]}…" if dest else "")
 
-    def _show_reaction_picker(self, item: MessageItem, widget: Gtk.Widget, x: float, y: float):
-        """Open the quick reactions for ``item``, pointing at (x, y) in ``widget``."""
+    def _show_message_menu(self, item: MessageItem, widget: Gtk.Widget, x: float, y: float):
+        """Open the message menu for ``item``, pointing at (x, y) in ``widget``."""
         self._close_reaction_picker()
         self._reaction_target = item.message_hash
         ok, point = widget.compute_point(self, Graphene.Point().init(x, y))
@@ -446,6 +559,8 @@ class ChatView(Adw.Bin):
             rect.x, rect.y, rect.width, rect.height = int(point.x), int(point.y), 1, 1
             self.reaction_popover.set_pointing_to(rect)
             self.emoji_chooser.set_pointing_to(rect)
+        self._reaction_choices.set_visible(can_react(item))
+        self._menu_reply_btn.set_visible(can_reply(item))
         self._reaction_copy_btn.set_visible(bool(item.content))
         self.reaction_popover.popup()
 
@@ -472,6 +587,12 @@ class ChatView(Adw.Bin):
         if any(r.get("mine") and r.get("emoji") == emoji for r in (item.reactions or [])):
             return  # already reacted with it; reactions can't be withdrawn
         self._on_send_reaction(self.current_dest_hash, message_hash, emoji)
+
+    def _reply_to_menu_target(self):
+        target = self._reaction_target
+        self._close_reaction_picker()
+        if target:
+            self.start_reply(target)
 
     def _copy_reaction_target_text(self):
         item = self._items.get(self._reaction_target or "")
