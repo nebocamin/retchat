@@ -427,7 +427,11 @@ class ChatView(Adw.Bin):
         self._clear_highlight()
         item.highlighted = True
         self._highlighted = item
-        self._highlight_source = GLib.timeout_add(int(HIGHLIGHT_SECONDS * 1000), self._clear_highlight)
+        self._highlight_source = GLib.timeout_add(int(HIGHLIGHT_SECONDS * 1000), self._on_highlight_timeout)
+
+    def _on_highlight_timeout(self) -> bool:
+        self._highlight_source = 0  # ends by returning False, not by source_remove()
+        return self._clear_highlight()
 
     def _clear_highlight(self) -> bool:
         if self._highlight_source:

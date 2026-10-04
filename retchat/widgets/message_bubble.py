@@ -8,7 +8,8 @@ from typing import Callable, Optional, Tuple
 import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('GdkPixbuf', '2.0')
-from gi.repository import Gdk, GdkPixbuf, GLib, Gtk, Pango
+gi.require_version('Graphene', '1.0')
+from gi.repository import Gdk, GdkPixbuf, GLib, Graphene, Gtk, Pango
 
 from retchat.models import MessageItem
 from retchat.nomadnet_pages import find_urls
@@ -24,6 +25,9 @@ THUMB_MIN_HEIGHT = 60
 # for a full 4000x3000 photo.
 THUMB_DECODE_SCALE = 2
 THUMB_CACHE_SIZE = 32
+
+_TOUCH_EVENTS = (Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE,
+                 Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL)
 
 
 @functools.lru_cache(maxsize=THUMB_CACHE_SIZE)
@@ -92,6 +96,12 @@ class MessageBubble(Gtk.Box):
     A reply shows the message it refers to above the text, as returned by
     ``resolve_reply(item)``: (author, text, the original is in the chat).
     Clicking it calls ``on_quote_clicked(item)``.
+
+    Touch: a selectable Gtk.Label claims every touch on press (to start a
+    selection), which cancels the gestures of its ancestors: the long press
+    that opens the menu and the scrolled window's drag. So touches on the
+    text are kept from the label (except on links, which stay tappable);
+    mouse input is unaffected, text can still be selected with it.
     """
 
     def __init__(
@@ -198,6 +208,12 @@ class MessageBubble(Gtk.Box):
         )
         self.label.add_css_class("message-text")
         self.label.connect("activate-link", self._on_activate_link)
+        touch_guard = Gtk.EventControllerLegacy()
+        touch_guard.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        touch_guard.connect("event", self._on_label_touch)
+        self.label.add_controller(touch_guard)
+        self._link_ranges: list = []  # (start, end) byte offsets of links in the label text
+        self._touch_on_link = False
         self.bubble.append(self.label)
 
         # Footer: time, hops, delivery state
@@ -249,6 +265,8 @@ class MessageBubble(Gtk.Box):
         self.bubble.set_css_classes(classes)
 
         text = item.content or ("" if has_image or item.files else "[Leere Nachricht]")
+        self._link_ranges = [(len(text[:start].encode()), len(text[:end].encode()))
+                             for start, end, _url in find_urls(text)]
         markup = linkify(text)
         if markup is None:
             self.label.set_text(text)  # also turns markup parsing off again
@@ -397,6 +415,35 @@ class MessageBubble(Gtk.Box):
     def _on_picture_released(self, _gesture, _n_press, _x, _y):
         if self._item is not None and self._on_image_clicked:
             self._on_image_clicked(self._item)
+
+    def _on_label_touch(self, _controller, event: Gdk.Event) -> bool:
+        """Keep touches from the text label (see class docstring); True = stop."""
+        if event.get_event_type() not in _TOUCH_EVENTS:
+            return False
+        if event.get_event_type() == Gdk.EventType.TOUCH_BEGIN:
+            self._touch_on_link = False
+            if self._link_ranges:
+                position = self._label_position(event)
+                self._touch_on_link = position is not None and self.link_at(*position)
+        return not self._touch_on_link
+
+    def _label_position(self, event: Gdk.Event) -> Optional[Tuple[float, float]]:
+        native = self.label.get_native()
+        found, x, y = event.get_position()
+        if native is None or not found:
+            return None
+        tx, ty = native.get_surface_transform()
+        ok, point = native.compute_point(self.label, Graphene.Point().init(x - tx, y - ty))
+        return (point.x, point.y) if ok else None
+
+    def link_at(self, x: float, y: float) -> bool:
+        """Whether (x, y) in label coordinates is on a link."""
+        if not self._link_ranges:
+            return False
+        ox, oy = self.label.get_layout_offsets()
+        inside, index, _trailing = self.label.get_layout().xy_to_index(
+            int((x - ox) * Pango.SCALE), int((y - oy) * Pango.SCALE))
+        return inside and any(start <= index < end for start, end in self._link_ranges)
 
     def _on_activate_link(self, _label: Gtk.Label, uri: str) -> bool:
         # A window action: rows are recycled and must not reference the window.
