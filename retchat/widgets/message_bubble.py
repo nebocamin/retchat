@@ -3,6 +3,7 @@
 import datetime
 import functools
 import os
+import sys
 from typing import Callable, Optional, Tuple
 
 import gi
@@ -28,6 +29,41 @@ THUMB_CACHE_SIZE = 32
 
 _TOUCH_EVENTS = (Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.TOUCH_UPDATE,
                  Gdk.EventType.TOUCH_END, Gdk.EventType.TOUCH_CANCEL)
+_POINTER_EVENTS = (Gdk.EventType.BUTTON_PRESS, Gdk.EventType.BUTTON_RELEASE, Gdk.EventType.MOTION_NOTIFY)
+_TOUCH_SOURCES = (Gdk.InputSource.TOUCHSCREEN, Gdk.InputSource.PEN)
+# RETCHAT_DEBUG_INPUT=1: log the input events reaching message texts (stderr)
+_DEBUG_INPUT = bool(os.environ.get("RETCHAT_DEBUG_INPUT"))
+
+
+def is_touch_input(event: Gdk.Event) -> bool:
+    """Whether a pointer or touch event comes from a finger (or pen) instead of a mouse.
+
+    Depending on device and compositor, touches arrive as touch events, as
+    pointer events emulated from them, or from a touchscreen (or pen-like
+    panel) device as plain pointer events.
+    """
+    event_type = event.get_event_type()
+    if event_type in _TOUCH_EVENTS:
+        return True
+    if event_type not in _POINTER_EVENTS:
+        return False
+    try:
+        if event.get_pointer_emulated():
+            return True
+    except (AttributeError, TypeError):
+        pass
+    device = event.get_device()
+    return device is not None and device.get_source() in _TOUCH_SOURCES
+
+
+def _describe(event: Gdk.Event) -> str:
+    device = event.get_device()
+    source = device.get_source().value_nick if device is not None else "?"
+    try:
+        emulated = event.get_pointer_emulated()
+    except (AttributeError, TypeError):
+        emulated = "?"
+    return f"{event.get_event_type().value_nick} source={source} emulated={emulated}"
 
 
 @functools.lru_cache(maxsize=THUMB_CACHE_SIZE)
@@ -99,9 +135,10 @@ class MessageBubble(Gtk.Box):
 
     Touch: a selectable Gtk.Label claims every touch on press (to start a
     selection), which cancels the gestures of its ancestors: the long press
-    that opens the menu and the scrolled window's drag. So touches on the
-    text are kept from the label (except on links, which stay tappable);
-    mouse input is unaffected, text can still be selected with it.
+    that opens the menu and the scrolled window's drag. So touch input on
+    the text (see is_touch_input) is kept from the label, except on links,
+    which stay tappable; mouse input is unaffected, text can still be
+    selected with it.
     """
 
     def __init__(
@@ -173,7 +210,9 @@ class MessageBubble(Gtk.Box):
         right_click.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         right_click.connect("pressed", lambda g, _n, x, y: self._on_menu_gesture(g, x, y))
         self.bubble.add_controller(right_click)
-        long_press = Gtk.GestureLongPress(touch_only=True)
+        # Not touch_only: some touch panels report as pen; with a mouse the
+        # text label claims the press first anyway.
+        long_press = Gtk.GestureLongPress()
         long_press.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
         long_press.connect("pressed", self._on_menu_gesture)
         self.bubble.add_controller(long_press)
@@ -417,15 +456,18 @@ class MessageBubble(Gtk.Box):
             self._on_image_clicked(self._item)
 
     def _on_label_touch(self, _controller, event: Gdk.Event) -> bool:
-        """Keep touches from the text label (see class docstring); True = stop."""
-        if event.get_event_type() not in _TOUCH_EVENTS:
-            return False
-        if event.get_event_type() == Gdk.EventType.TOUCH_BEGIN:
+        """Keep touch input from the text label (see class docstring); True = stop."""
+        touch = is_touch_input(event)
+        if touch and event.get_event_type() in (Gdk.EventType.TOUCH_BEGIN, Gdk.EventType.BUTTON_PRESS):
             self._touch_on_link = False
             if self._link_ranges:
                 position = self._label_position(event)
                 self._touch_on_link = position is not None and self.link_at(*position)
-        return not self._touch_on_link
+        stop = touch and not self._touch_on_link
+        if _DEBUG_INPUT and event.get_event_type() not in (Gdk.EventType.MOTION_NOTIFY, Gdk.EventType.TOUCH_UPDATE):
+            print(f"Retchat input: message text got {_describe(event)} -> "
+                  f"{'kept from the label' if stop else 'passed to the label'}", file=sys.stderr, flush=True)
+        return stop
 
     def _label_position(self, event: Gdk.Event) -> Optional[Tuple[float, float]]:
         native = self.label.get_native()
@@ -459,6 +501,8 @@ class MessageBubble(Gtk.Box):
             self._on_reply_requested(self._item)
 
     def _on_menu_gesture(self, gesture: Gtk.Gesture, x: float, y: float):
+        if _DEBUG_INPUT:
+            print(f"Retchat input: {type(gesture).__name__} on message -> menu", file=sys.stderr, flush=True)
         item = self._item
         if item is None or not self._on_menu_requested or not (can_reply(item) or item.content):
             return  # nothing to offer: keep the text label's context menu

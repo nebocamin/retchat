@@ -18,17 +18,34 @@ def _gtk_available():
 pytestmark = pytest.mark.skipif(not _gtk_available(), reason="needs a display")
 
 
+class FakeDevice:
+    def __init__(self, source):
+        self._source = source
+
+    def get_source(self):
+        return self._source
+
+
 class FakeEvent:
     """Enough of Gdk.Event for MessageBubble._on_label_touch."""
 
-    def __init__(self, event_type, x=0.0, y=0.0):
+    def __init__(self, event_type, x=0.0, y=0.0, source=None, emulated=False):
+        from gi.repository import Gdk
         self._type, self._x, self._y = event_type, x, y
+        self._device = FakeDevice(source if source is not None else Gdk.InputSource.TOUCHSCREEN)
+        self._emulated = emulated
 
     def get_event_type(self):
         return self._type
 
     def get_position(self):
         return True, self._x, self._y
+
+    def get_device(self):
+        return self._device
+
+    def get_pointer_emulated(self):
+        return self._emulated
 
 
 @pytest.fixture
@@ -91,8 +108,26 @@ def test_touch_on_link_reaches_the_label(shown_bubble):
 def test_mouse_reaches_the_label(shown_bubble):
     from gi.repository import Gdk
     bubble, _text = shown_bubble
+    for source in (Gdk.InputSource.MOUSE, Gdk.InputSource.TOUCHPAD):
+        for event_type in (Gdk.EventType.BUTTON_PRESS, Gdk.EventType.MOTION_NOTIFY, Gdk.EventType.BUTTON_RELEASE):
+            assert bubble._on_label_touch(None, FakeEvent(event_type, 5, 5, source=source)) is False
+
+
+@pytest.mark.parametrize("source, emulated", [
+    ("TOUCHSCREEN", False),  # pointer events from a touchscreen device
+    ("MOUSE", True),         # pointer events emulated from touches
+    ("PEN", False),          # touch panels reporting as pen
+])
+def test_touch_as_pointer_events_is_kept_from_the_label(shown_bubble, source, emulated):
+    from gi.repository import Gdk
+    bubble, text = shown_bubble
+    src = getattr(Gdk.InputSource, source)
+    x, y = _surface_point(bubble, 2)
     for event_type in (Gdk.EventType.BUTTON_PRESS, Gdk.EventType.MOTION_NOTIFY, Gdk.EventType.BUTTON_RELEASE):
-        assert bubble._on_label_touch(None, FakeEvent(event_type, 5, 5)) is False
+        assert bubble._on_label_touch(None, FakeEvent(event_type, x, y, source=src, emulated=emulated)) is True
+    # ... and links stay tappable that way too
+    x, y = _surface_point(bubble, text.index("nomadnetwork") + 5)
+    assert bubble._on_label_touch(None, FakeEvent(Gdk.EventType.BUTTON_PRESS, x, y, source=src, emulated=emulated)) is False
 
 
 def test_link_ranges_use_byte_offsets():
