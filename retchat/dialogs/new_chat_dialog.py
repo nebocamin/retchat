@@ -159,7 +159,11 @@ class NewChatDialog(Adw.Window):
 
         view = Adw.ToolbarView(content=box)
         view.add_top_bar(Adw.HeaderBar())
-        return Adw.NavigationPage(title="Meine Adresse", tag="own", child=view)
+        page = Adw.NavigationPage(title="Meine Adresse", tag="own", child=view)
+        # Whoever scans the code needs a path to us, not just the key: announce,
+        # so the network has a fresh one (see announce_for_contact_exchange).
+        page.connect("shown", lambda _p: self._announce_for_exchange())
+        return page
 
     # --- Navigation ---------------------------------------------------------------
 
@@ -291,12 +295,19 @@ class NewChatDialog(Adw.Window):
             return
         if contact.public_key is not None and self.service is not None:
             self.service.learn_contact(contact)
+            # The other side can then verify our first message and reply
+            self._announce_for_exchange()
         nickname = self.name_row.get_text().strip() or None
         self._stop_scanner()
         self.close()
         self.on_chat_created(contact.destination_hash, nickname)
 
     # --- Helpers --------------------------------------------------------------------
+
+    def _announce_for_exchange(self):
+        announce = getattr(self.service, "announce_for_contact_exchange", None)
+        if announce is not None:
+            announce()
 
     def _copy(self, text: str, message: str):
         self.get_clipboard().set(text)

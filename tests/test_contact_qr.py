@@ -164,3 +164,30 @@ def test_scanner_pipeline_reads_qr(tmp_path):
     scanner.stop()
     assert found and found[0] == uri
     assert not scanner.running and scanner.picture.get_paintable() is None
+
+
+# --- Interoperability and announcing --------------------------------------------------
+
+# Shown by Columba as QR code (same format as MeshChatX and Retchat)
+COLUMBA_URI = ("lxma://419f9d5fbd1ec54bd9a4e79b2262edf3:f4986aa938cdb13f21ac5847dbf9d3936b90cc62566ef83008a4b82079ca0c"
+               "56e757679b1156043e5b9cdf416b7c186f2775af73162ee3e43ac01565829beafb")
+
+
+def test_columba_code():
+    contact = parse_contact(COLUMBA_URI)
+    assert contact.destination_hash == "419f9d5fbd1ec54bd9a4e79b2262edf3"
+    assert len(contact.public_key) == 64  # verified against the address
+    assert contact_uri(contact.destination_hash, contact.public_key) == COLUMBA_URI
+
+
+def test_contact_exchange_announce_is_rate_limited(service, monkeypatch):
+    import retchat.reticulum_service as rs
+    now = [1000.0]
+    monkeypatch.setattr(rs.time, "monotonic", lambda: now[0])
+    announces = []
+    service.announce = lambda: announces.append(now[0])
+    assert service.announce_for_contact_exchange() is True
+    assert service.announce_for_contact_exchange() is False
+    now[0] += rs.CONTACT_ANNOUNCE_INTERVAL
+    assert service.announce_for_contact_exchange() is True
+    assert announces == [1000.0, 1000.0 + rs.CONTACT_ANNOUNCE_INTERVAL]

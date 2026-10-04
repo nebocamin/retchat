@@ -33,7 +33,9 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   - Start a chat by address, by pasting a contact link (`lxmf://…`, `lxma://…`) or by scanning a QR code with the
     camera (or from an image, e.g. a screenshot). The own address can be shown as QR code. Codes contain address
     and public key (`lxma://`, as in MeshChatX), so a scanned contact can be written to right away, without waiting
-    for an announce; the address is checked against the key.
+    for an announce; the address is checked against the key. Same format as Columba and MeshChatX. Showing the own
+    code (and starting a chat from a scanned one) announces right away: delivery also needs a path, and hubs only
+    answer path requests for destinations whose announce they have seen.
   - Delete chats from the chat menu, or by right click / long press in the chat list.
 - **Images and files**
   - Images are downscaled before sending and shown inline, with a built-in image viewer.

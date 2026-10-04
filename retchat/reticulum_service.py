@@ -79,6 +79,8 @@ STAMP_COST_SAVE_INTERVAL = 60.0
 ANNOUNCE_BATCH_INTERVAL = 5.0
 # Seconds after the last "conversations changed" event before the UI reloads
 CONVERSATIONS_CHANGED_DELAY = 1.0
+# Minimum seconds between announces for a QR/link exchange (see announce_for_contact_exchange)
+CONTACT_ANNOUNCE_INTERVAL = 60.0
 # Seconds to wait for RNS to attach/detach an interface (see _apply_interface_change)
 INTERFACE_APPLY_TIMEOUT = 20.0
 
@@ -723,6 +725,25 @@ class ReticulumService:
     def contact_uri(self) -> str:
         """Own address with public key, as lxma:// link (shown as QR code)."""
         return contact_uri(self.delivery_destination_hex, self.identity.get_public_key())
+
+    def announce_for_contact_exchange(self) -> bool:
+        """Announce now (at most every CONTACT_ANNOUNCE_INTERVAL) for a QR/link exchange.
+
+        The key in a contact link lets the other side encrypt, but delivery
+        still needs a path. Transport nodes answer path requests only from
+        their path table, they don't search for unknown destinations (except
+        on access point/gateway/roaming/boundary interfaces); without a
+        recent announce, the other side would wait for the next periodic one
+        (NomadNet: every few hours). Announcing while the code is shown, or
+        right after a code was scanned, puts fresh paths into the network.
+        Returns whether an announce was sent.
+        """
+        now = time.monotonic()
+        if now - getattr(self, "_contact_announce_at", float("-inf")) < CONTACT_ANNOUNCE_INTERVAL:
+            return False
+        self._contact_announce_at = now
+        self.announce()
+        return True
 
     def learn_contact(self, contact: Contact) -> bool:
         """Remember the identity of a scanned contact link.
