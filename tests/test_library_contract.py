@@ -239,6 +239,31 @@ def test_rns_api():
     assert RNS.Link.ACTIVE != RNS.Link.CLOSED
 
 
+def test_interface_management_api():
+    """_apply_interface_change and the interfaces dialog (RNS >= 1.5.6)."""
+    for action in ("attach", "detach", "reload"):
+        method = getattr(RNS.Reticulum, f"{action}_interface")
+        assert _params(method) == ["self", "interface_name"]
+        source = _source(method)
+        # Forwarded to a shared instance, which handles it in its RPC loop
+        assert "is_connected_to_shared_instance" in source and f'"manage": "{action}_interface"' in source
+        assert f'path == "{action}_interface"' in _source(RNS.Reticulum.rpc_loop)
+    # Result meanings: True done, None no such interface/entry, False refused
+    detach = _source(RNS.Reticulum._detach_interface)
+    assert "return None" in detach and "return True" in detach
+    attach = _source(RNS.Reticulum._attach_interface)
+    assert "force_attach=True" in attach and "return None" in attach
+    assert "self.configpath" in attach
+    assert isinstance(RNS.Reticulum.configpath, str)
+
+
+def test_interface_stats_fields():
+    stats = _source(RNS.Reticulum.get_interface_stats)
+    for field in ('"short_name"', '"type"', '"status"', '"rxb"', '"txb"', '"interfaces"'):
+        assert f"ifstats[{field}]" in stats or f"stats[{field}]" in stats, field
+    assert '"get": "interface_stats"' in stats
+
+
 def test_lxmf_api():
     assert LXMF.display_name_from_app_data(umsgpack.packb([b"Alice", 8])) == "Alice"
     for name in ("FIELD_IMAGE", "FIELD_FILE_ATTACHMENTS"):

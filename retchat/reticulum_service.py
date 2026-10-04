@@ -78,6 +78,8 @@ STAMP_COST_SAVE_INTERVAL = 60.0
 ANNOUNCE_BATCH_INTERVAL = 5.0
 # Seconds after the last "conversations changed" event before the UI reloads
 CONVERSATIONS_CHANGED_DELAY = 1.0
+# Seconds to wait for RNS to attach/detach an interface (see _apply_interface_change)
+INTERFACE_APPLY_TIMEOUT = 20.0
 
 
 def is_sendable_image(path: str) -> bool:
@@ -371,14 +373,28 @@ class ReticulumService:
             RNS.LOG_NOTICE
         )
 
+    def _config_path(self) -> str:
+        """The Reticulum config file this instance uses.
+
+        Same lookup as RNS.Reticulum, which also reads interface sections
+        from it when attaching one at runtime; before RNS is started (see
+        _ensure_tcp_default_config) the lookup is repeated here.
+        """
+        if self._rnsconfigdir:
+            return os.path.join(self._rnsconfigdir, "config")
+        if RNS.Reticulum.configpath:
+            return RNS.Reticulum.configpath
+        home = os.path.expanduser("~")
+        for config_dir in ("/etc/reticulum", os.path.join(home, ".config", "reticulum")):
+            if os.path.isdir(config_dir) and os.path.isfile(os.path.join(config_dir, "config")):
+                return os.path.join(config_dir, "config")
+        return os.path.join(home, ".reticulum", "config")
+
     def _ensure_tcp_default_config(self):
         """Ensure ~/.reticulum/config exists with TCP enabled and transport disabled for mobile phones."""
         try:
-            cfg_dir = os.path.expanduser("~/.reticulum")
-            if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
-                cfg_dir = os.path.expanduser("~/.config/reticulum")
-            os.makedirs(cfg_dir, exist_ok=True)
-            cfg_path = os.path.join(cfg_dir, "config")
+            cfg_path = self._config_path()
+            os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
 
             default_host = "sideband.connect.reticulum.network"
             default_port = "7822"
@@ -444,10 +460,7 @@ class ReticulumService:
 
     def get_tcp_settings(self) -> Dict[str, Any]:
         """Read TCP and AutoInterface settings from ~/.reticulum/config."""
-        cfg_dir = os.path.expanduser("~/.reticulum")
-        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
-            cfg_dir = os.path.expanduser("~/.config/reticulum")
-        cfg_path = os.path.join(cfg_dir, "config")
+        cfg_path = self._config_path()
 
         default_host = "sideband.connect.reticulum.network"
         default_port = "7822"
@@ -482,12 +495,15 @@ class ReticulumService:
             "config_path": cfg_path
         }
 
-    def save_tcp_settings(self, host: str, port: str, disable_auto: bool) -> str:
-        """Update ~/.reticulum/config with TCP interface and AutoInterface preferences."""
-        cfg_dir = os.path.expanduser("~/.reticulum")
-        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
-            cfg_dir = os.path.expanduser("~/.config/reticulum")
-        cfg_path = os.path.join(cfg_dir, "config")
+    def save_tcp_settings(self, host: str, port: str, disable_auto: Optional[bool] = None,
+                          on_applied: Optional[Callable[[str, str], None]] = None) -> str:
+        """Save the TCP hub (and optionally the AutoInterface state) in the
+        Reticulum config and reconnect the TCP interface right away.
+
+        ``disable_auto`` None leaves the AutoInterface as it is.
+        ``on_applied(name, outcome)`` as for set_interface_enabled.
+        """
+        cfg_path = self._config_path()
 
         from RNS.vendor.configobj import ConfigObj
         cfg = ConfigObj(cfg_path) if os.path.exists(cfg_path) else ConfigObj()
@@ -516,18 +532,22 @@ class ReticulumService:
 
         cfg["interfaces"][tcp_key]["type"] = "TCPClientInterface"
         cfg["interfaces"][tcp_key]["enabled"] = "yes"
+        cfg["interfaces"][tcp_key]["interface_enabled"] = "true"
         cfg["interfaces"][tcp_key]["target_host"] = host.strip()
         cfg["interfaces"][tcp_key]["target_port"] = port.strip()
 
-        if "Default Interface" in cfg["interfaces"]:
-            cfg["interfaces"]["Default Interface"]["enabled"] = "no" if disable_auto else "yes"
-        elif disable_auto:
-            cfg["interfaces"]["Default Interface"] = {
-                "type": "AutoInterface",
-                "enabled": "no"
-            }
+        if disable_auto is not None:
+            if "Default Interface" in cfg["interfaces"]:
+                cfg["interfaces"]["Default Interface"]["enabled"] = "no" if disable_auto else "yes"
+            elif disable_auto:
+                cfg["interfaces"]["Default Interface"] = {
+                    "type": "AutoInterface",
+                    "enabled": "no"
+                }
 
         cfg.write()
+        # Reconnect with the new target (or start it, if it wasn't running)
+        self._apply_interface_change(tcp_key, "reload", on_applied)
         return cfg_path
 
     # --- LXMF stamp costs ---
@@ -1641,12 +1661,31 @@ class ReticulumService:
         return False
 
     # --- Interfaces ---
+    def get_interface_status(self) -> Dict[str, Dict[str, Any]]:
+        """Running interfaces by name: {"type", "online", "rxb", "txb"}.
+
+        Asks RNS, so as client of a shared instance (rnsd, another app)
+        these are the shared instance's interfaces, not the local link to it.
+        """
+        try:
+            stats = RNS.Reticulum.get_instance().get_interface_stats() or {}
+        except Exception as e:
+            RNS.log(f"Retchat: Could not get interface stats: {e}", RNS.LOG_WARNING)
+            return {}
+        status = {}
+        for i in stats.get("interfaces", []):
+            name = i.get("short_name") or i.get("name")
+            # The shared instance's local sockets (server and its clients)
+            if i.get("type") in ("LocalServerInterface", "LocalClientInterface"):
+                continue
+            if name:
+                status[name] = {"type": i.get("type", ""), "online": bool(i.get("status")),
+                                "rxb": i.get("rxb", 0), "txb": i.get("txb", 0)}
+        return status
+
     def get_configured_interfaces(self) -> List[Dict[str, Any]]:
-        """Read all configured interfaces from ~/.reticulum/config, cross-referenced with live status."""
-        cfg_dir = os.path.expanduser("~/.reticulum")
-        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
-            cfg_dir = os.path.expanduser("~/.config/reticulum")
-        cfg_path = os.path.join(cfg_dir, "config")
+        """Interfaces of the Reticulum config, with their live status."""
+        cfg_path = self._config_path()
 
         if not os.path.exists(cfg_path):
             return []
@@ -1659,10 +1698,7 @@ class ReticulumService:
             RNS.log(f"Retchat: Error reading interfaces from config: {e}", RNS.LOG_ERROR)
             return []
 
-        live_by_name = {}
-        for iface in RNS.Transport.interfaces:
-            name = getattr(iface, "name", str(iface))
-            live_by_name[name] = iface
+        live = self.get_interface_status()
 
         results = []
         for name, c in raw_interfaces.items():
@@ -1676,10 +1712,7 @@ class ReticulumService:
             b_ifen = ifen in ("true", "yes", "1")
             is_enabled = b_en or b_ifen
 
-            live_iface = live_by_name.get(name)
-            is_online = getattr(live_iface, "online", False) if live_iface else False
-            rxb = getattr(live_iface, "rxb", 0) if live_iface else 0
-            txb = getattr(live_iface, "txb", 0) if live_iface else 0
+            state = live.get(name, {})
 
             details = []
             if itype in ("TCPClientInterface", "TCPInterface"):
@@ -1705,21 +1738,26 @@ class ReticulumService:
                 "name": name,
                 "type": itype,
                 "enabled": is_enabled,
-                "online": is_online,
-                "rxb": rxb,
-                "txb": txb,
+                "online": state.get("online", False),
+                "rxb": state.get("rxb", 0),
+                "txb": state.get("txb", 0),
                 "details": " • ".join(details) if details else itype,
                 "config": dict(c)
             })
 
         return results
 
-    def set_interface_enabled(self, name: str, enabled: bool) -> bool:
-        """Toggle an interface enabled/disabled in ~/.reticulum/config and update live state."""
-        cfg_dir = os.path.expanduser("~/.reticulum")
-        if os.path.isdir(os.path.expanduser("~/.config/reticulum")) and os.path.isfile(os.path.expanduser("~/.config/reticulum/config")):
-            cfg_dir = os.path.expanduser("~/.config/reticulum")
-        cfg_path = os.path.join(cfg_dir, "config")
+    def set_interface_enabled(self, name: str, enabled: bool,
+                              on_applied: Optional[Callable[[str, str], None]] = None) -> bool:
+        """Switch an interface on or off in the Reticulum config and on the
+        running instance.
+
+        Returns False if the config couldn't be changed. Applying runs in
+        the background; ``on_applied(name, outcome)`` is then called on the
+        main loop with outcome "applied", "restart" (saved, but the running
+        instance didn't take it, e.g. an older rnsd) or "error".
+        """
+        cfg_path = self._config_path()
 
         if not os.path.exists(cfg_path):
             return False
@@ -1739,36 +1777,74 @@ class ReticulumService:
                 iface_cfg["interface_enabled"] = "false"
 
             cfg.write()
-
-            # Dynamic live update: if disabling, detach it so it stops reconnecting / holding ports
-            if not enabled:
-                for iface in RNS.Transport.interfaces:
-                    if getattr(iface, "name", None) == name:
-                        try:
-                            if hasattr(iface, "detach"):
-                                iface.detach()
-                            iface.online = False
-                            RNS.log(f"Retchat: Detached interface '{name}'", RNS.LOG_NOTICE)
-                        except Exception as e:
-                            RNS.log(f"Retchat: Error detaching interface '{name}': {e}", RNS.LOG_WARNING)
-            return True
         except Exception as e:
             RNS.log(f"Retchat: Failed to toggle interface '{name}': {e}", RNS.LOG_ERROR)
             return False
 
+        self._apply_interface_change(name, "attach" if enabled else "detach", on_applied)
+        return True
+
+    def _apply_interface_change(self, name: str, action: str,
+                                on_applied: Optional[Callable[[str, str], None]] = None):
+        """Attach, detach or reload interface ``name`` on the running instance.
+
+        RNS reads the interface's section from its config file and, as a
+        client of a shared instance, asks that instance over RPC. A shared
+        instance older than RNS 1.5.6 never answers that request and the
+        call has no timeout, so it runs in a thread that is given up on
+        after INTERFACE_APPLY_TIMEOUT (the thread stays blocked; it's
+        daemonic and holds nothing).
+        """
+        def call(act):
+            box: Dict[str, Any] = {}
+
+            def run():
+                try:
+                    box["result"] = getattr(RNS.Reticulum.get_instance(), f"{act}_interface")(name)
+                except Exception as e:
+                    box["error"] = e
+
+            t = threading.Thread(target=run, daemon=True, name=f"Iface-{act}")
+            t.start()
+            t.join(INTERFACE_APPLY_TIMEOUT)
+            if t.is_alive():
+                box["timeout"] = True
+            return box
+
+        def worker():
+            box = call(action)
+            if action == "reload" and box.get("result") is None and "error" not in box and "timeout" not in box:
+                # Wasn't running: start it
+                box = call("attach")
+                outcome = self._interface_outcome("attach", name, box)
+            else:
+                outcome = self._interface_outcome(action, name, box)
+            RNS.log(f"Retchat: {action} interface '{name}': {box} -> {outcome}", RNS.LOG_NOTICE)
+            if on_applied is not None:
+                GLib.idle_add(on_applied, name, outcome)
+
+        threading.Thread(target=worker, daemon=True, name=f"Iface-{name[:16]}").start()
+
+    def _interface_outcome(self, action: str, name: str, box: Dict[str, Any]) -> str:
+        """Map RNS's attach/detach/reload result to "applied", "restart" or "error"."""
+        if box.get("timeout") or "error" in box:
+            # The config is saved; the running instance didn't take it.
+            return "restart"
+        result = box.get("result")
+        if result is True:
+            return "applied"
+        if result is None:
+            # detach: wasn't running (fine); attach: no such config entry
+            return "applied" if action == "detach" else "error"
+        if action == "attach" and name in self.get_interface_status():
+            return "applied"  # was already running
+        # Interface management disabled in the shared instance's config,
+        # or an interface RNS can't detach (I2P, local)
+        return "restart"
+
     def get_interfaces_info(self) -> List[Dict[str, Any]]:
-        result = []
-        for iface in RNS.Transport.interfaces:
-            info = {
-                "name": getattr(iface, "name", str(iface)),
-                "type": type(iface).__name__,
-                "online": getattr(iface, "online", True),
-                "rxb": getattr(iface, "rxb", 0),
-                "txb": getattr(iface, "txb", 0),
-                "mode": getattr(iface, "mode", "normal")
-            }
-            result.append(info)
-        return result
+        """All running interfaces (incl. spawned ones, e.g. AutoInterface peers)."""
+        return [{"name": name, **state} for name, state in self.get_interface_status().items()]
 
     # ------------------------------------------------------------------ #
     # LXMF Propagation Node Sync

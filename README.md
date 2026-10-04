@@ -45,6 +45,7 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
 - **Identity and interfaces**
   - Set your display name, copy your LXMF address and identity hash, announce yourself on the mesh.
   - Overview of all Reticulum interfaces (TCP, AutoInterface, RNode/LoRa) with status and traffic; configure the TCP hub and the propagation node.
+  - Interfaces are switched on and off, and a changed TCP hub is reconnected, without a restart; when Retchat uses a shared instance (rnsd, another app), that instance's interfaces are switched (it needs RNS 1.5.6 or newer, otherwise the change takes effect on its next start).
 - **Made for phones and desktops**
   - Adaptive layout via `Adw.Breakpoint`: on narrow screens (down to 360 px) sidebar and chat become separate pages with a back button.
   - Native light and dark style, GNOME HIG compliant.
@@ -125,7 +126,7 @@ Retchat uses [NomadNet](https://github.com/markqvist/NomadNet) as its LXMF backe
 | `~/.nomadnetwork/storage/conversations/` | Messages |
 | `~/.nomadnetwork/storage/attachments/` | Images and files of received and sent messages |
 | `~/.nomadnetwork/config` | NomadNet settings, e.g. announce interval (default: at start and every 6 hours) |
-| `~/.reticulum/config` | Reticulum interfaces; on first start Retchat makes sure a TCP interface is configured |
+| `~/.reticulum/config` | Reticulum interfaces; on first start Retchat makes sure a TCP interface is configured. Like Reticulum itself, Retchat uses `/etc/reticulum/config` or `~/.config/reticulum/config` instead if one of them exists |
 | `~/.local/share/retchat/retchat.db` | Retchat's own data: custom contact names and settings |
 
 ---

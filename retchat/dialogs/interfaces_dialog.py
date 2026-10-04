@@ -28,6 +28,12 @@ class InterfacesDialog(_BaseDialog):
         self.set_title("Schnittstellen & Reticulum Status")
         self.set_size_request(300, 360)
         self.live_rows: List[Adw.ActionRow] = []
+        # Configured interfaces: name -> (switch row, status badge)
+        self._iface_rows: Dict[str, Any] = {}
+        self._pending: set = set()  # interfaces being attached/detached
+        self._refresh_source: Optional[int] = None
+        self.connect("closed" if _BaseDialog is not Adw.PreferencesWindow else "close-request",
+                     lambda *_a: self._cancel_refresh())
 
         self.page = Adw.PreferencesPage()
 
@@ -35,8 +41,8 @@ class InterfacesDialog(_BaseDialog):
         self.group_ifaces = Adw.PreferencesGroup()
         self.group_ifaces.set_title("Mesh-Schnittstellen (An / Aus)")
         self.group_ifaces.set_description(
-            "Schalte Schnittstellen flexibel an oder aus. "
-            "Deaktivierte RNodes werden sofort getrennt und blockieren keine USB-Ports."
+            "Änderungen gelten sofort, auch für einen gemeinsam genutzten Reticulum-Dienst (rnsd). "
+            "Deaktivierte RNodes geben ihren USB-Port frei."
         )
         self.page.add(self.group_ifaces)
         self._build_interface_toggles()
@@ -146,56 +152,79 @@ class InterfacesDialog(_BaseDialog):
 
         for iface in configured:
             name = iface["name"]
-            itype = iface["type"]
-            enabled = iface["enabled"]
-            online = iface["online"]
-            details = iface["details"]
 
             row = Adw.SwitchRow()
             row.set_title(name)
-            row.set_subtitle(f"{itype} • {details}")
-            row.set_active(enabled)
+            row.set_subtitle(f"{iface['type']} • {iface['details']}")
+            row.set_active(iface["enabled"])
 
-            # Status Badge
             badge = Gtk.Label()
             badge.add_css_class("badge")
-            self._update_badge(badge, enabled, online)
+            self._update_badge(badge, iface["enabled"], iface["online"])
             row.add_suffix(badge)
 
-            # Connect toggle change
-            def _on_toggled(switch, _pspec, iface_name=name, status_badge=badge):
-                is_active = switch.get_active()
-                success = self.service.set_interface_enabled(iface_name, is_active)
-                if success:
-                    self._update_badge(status_badge, is_active, False if not is_active else online)
-                    if is_active:
-                        self._show_toast(f"'{iface_name}' aktiviert (nach Neustart aktiv)")
-                    else:
-                        self._show_toast(f"'{iface_name}' deaktiviert und getrennt")
-                    # Refresh live list
-                    self._refresh_live_stats()
-                else:
-                    self._show_toast(f"Fehler beim Ändern von '{iface_name}'")
-
-            row.connect("notify::active", _on_toggled)
+            row.connect("notify::active", self._on_interface_toggled, name)
+            self._iface_rows[name] = (row, badge)
             self.group_ifaces.add(row)
 
-    def _update_badge(self, badge: Gtk.Label, enabled: bool, online: bool):
-        badge.remove_css_class("hops-badge")
-        badge.remove_css_class("unread-badge")
-        badge.remove_css_class("dim-label")
+    def _on_interface_toggled(self, row: Adw.SwitchRow, _pspec, name: str):
+        active = row.get_active()
+        if not self.service.set_interface_enabled(name, active, self._on_interface_applied):
+            self._show_toast(f"Fehler beim Ändern von '{name}'")
+            return
+        self._pending.add(name)
+        self._set_badge(self._iface_rows[name][1], "…", "dim-label")
 
-        if not enabled:
-            badge.set_text("Aus")
-            badge.add_css_class("dim-label")
-        elif online:
-            badge.set_text("Online")
-            badge.add_css_class("hops-badge")
+    def _on_interface_applied(self, name: str, outcome: str) -> bool:
+        self._pending.discard(name)
+        row, _badge = self._iface_rows.get(name, (None, None))
+        active = row.get_active() if row is not None else False
+        if outcome == "applied":
+            self._show_toast(f"'{name}' aktiviert" if active else f"'{name}' deaktiviert und getrennt")
+        elif outcome == "restart":
+            self._show_toast(f"'{name}' gespeichert – wirksam nach dem nächsten Start von Reticulum")
         else:
-            badge.set_text("Warten")
-            badge.add_css_class("unread-badge")
+            self._show_toast(f"'{name}' konnte nicht übernommen werden")
+        self._refresh_status()
+        # Connections (TCP, RNode) need a moment to come up
+        self._cancel_refresh()
+        self._refresh_source = GLib.timeout_add_seconds(3, self._delayed_refresh)
+        return False
 
-    def _refresh_live_stats(self):
+    def _delayed_refresh(self) -> bool:
+        self._refresh_source = None
+        self._refresh_status()
+        return False
+
+    def _cancel_refresh(self):
+        if self._refresh_source is not None:
+            GLib.source_remove(self._refresh_source)
+            self._refresh_source = None
+
+    def _refresh_status(self):
+        """Update badges and traffic counters from the running instance."""
+        status = self.service.get_interface_status()
+        for name, (row, badge) in self._iface_rows.items():
+            if name not in self._pending:
+                self._update_badge(badge, row.get_active(), status.get(name, {}).get("online", False))
+        self._refresh_live_stats(status)
+
+    @staticmethod
+    def _set_badge(badge: Gtk.Label, text: str, css_class: str):
+        for cls in ("hops-badge", "unread-badge", "dim-label"):
+            badge.remove_css_class(cls)
+        badge.set_text(text)
+        badge.add_css_class(css_class)
+
+    def _update_badge(self, badge: Gtk.Label, enabled: bool, online: bool):
+        if not enabled:
+            self._set_badge(badge, "Aus", "dim-label")
+        elif online:
+            self._set_badge(badge, "Online", "hops-badge")
+        else:
+            self._set_badge(badge, "Warten", "unread-badge")
+
+    def _refresh_live_stats(self, status: Optional[Dict[str, Dict[str, Any]]] = None):
         for row in self.live_rows:
             try:
                 self.group_live.remove(row)
@@ -203,7 +232,9 @@ class InterfacesDialog(_BaseDialog):
                 pass
         self.live_rows.clear()
 
-        interfaces = self.service.get_interfaces_info()
+        if status is None:
+            status = self.service.get_interface_status()
+        interfaces = [{"name": name, **state} for name, state in status.items()]
         if not interfaces:
             empty_row = Adw.ActionRow(title="Keine aktiven Verbindungen")
             self.group_live.add(empty_row)
@@ -235,8 +266,26 @@ class InterfacesDialog(_BaseDialog):
         host = self.tcp_host_row.get_text().strip() or "sideband.connect.reticulum.network"
         port = self.tcp_port_row.get_text().strip() or "7822"
 
-        self.service.save_tcp_settings(host, port, False)
-        self._show_toast("TCP-Einstellungen gespeichert!")
+        self.service.save_tcp_settings(host, port, on_applied=self._on_tcp_applied)
+        self._show_toast("TCP-Einstellungen gespeichert, Verbindung wird neu aufgebaut…")
+
+    def _on_tcp_applied(self, name: str, outcome: str) -> bool:
+        if outcome == "applied":
+            self._show_toast(f"'{name}' mit neuem Ziel verbunden")
+        elif outcome == "restart":
+            self._show_toast("TCP-Einstellungen gespeichert – wirksam nach dem nächsten Start von Reticulum")
+        else:
+            self._show_toast(f"'{name}' konnte nicht neu verbunden werden")
+        if name in self._iface_rows:
+            row = self._iface_rows[name][0]
+            # The interface is enabled now; don't trigger another attach
+            row.handler_block_by_func(self._on_interface_toggled)
+            row.set_active(True)
+            row.handler_unblock_by_func(self._on_interface_toggled)
+        self._refresh_status()
+        self._cancel_refresh()
+        self._refresh_source = GLib.timeout_add_seconds(3, self._delayed_refresh)
+        return False
 
     def _on_save_prop_node_clicked(self, _btn):
         node_hex = self.prop_node_row.get_text().strip()
