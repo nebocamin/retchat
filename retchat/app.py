@@ -9,13 +9,14 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
+from retchat import __version__
 from retchat.database import Database
 from retchat.reticulum_service import ReticulumService, library_versions
 from retchat.widgets.attachment_row import purge_open_copies
 from retchat.window import RetchatWindow
 
 APP_ID = "org.selfmade.Retchat"
-VERSION = "0.1.0"
+VERSION = __version__
 # Icons of a source checkout; installed builds (Flatpak) use /app/share/icons.
 SOURCE_ICON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "icons")
 
