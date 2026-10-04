@@ -58,6 +58,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.split_view.set_min_sidebar_width(260)
         self.split_view.set_max_sidebar_width(380)
         self.split_view.set_sidebar_width_fraction(0.32)
+        # In px, not the default sp: sp scales with the text size, and at 140 %
+        # text (phones) a 260 sp minimum sidebar is wider than a 360 px screen.
+        self.split_view.set_sidebar_width_unit(Adw.LengthUnit.PX)
         self.split_view.set_enable_show_gesture(True)
         self.split_view.set_enable_hide_gesture(True)
 

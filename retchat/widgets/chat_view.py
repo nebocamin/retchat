@@ -210,9 +210,10 @@ class ChatView(Adw.Bin):
         """
         self.reaction_popover = Gtk.Popover()
         self.reaction_popover.add_css_class("reaction-popover")
-        box = Gtk.Box(spacing=2)
-        # Reactions (received messages only)
-        self._reaction_choices = Gtk.Box(spacing=2)
+        # Two rows, so it fits a 360 px phone screen: quick reactions (received
+        # messages only), then labelled actions (no tooltips on touch screens).
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self._reaction_choices = Gtk.Box(spacing=2, halign=Gtk.Align.CENTER)
         box.append(self._reaction_choices)
         for emoji in QUICK_REACTIONS:
             btn = Gtk.Button(label=emoji, tooltip_text=f"Mit {emoji} reagieren")
@@ -226,22 +227,21 @@ class ChatView(Adw.Bin):
         more_btn.add_css_class("circular")
         more_btn.connect("clicked", lambda _b: self._show_emoji_chooser())
         self._reaction_choices.append(more_btn)
-        self._reaction_choices.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL,
-                                                    margin_start=2, margin_end=2))
-        reply_btn = Gtk.Button(icon_name="mail-reply-sender-symbolic", tooltip_text="Antworten",
-                               valign=Gtk.Align.CENTER)
+        self._menu_separator = Gtk.Separator()
+        box.append(self._menu_separator)
+
+        actions = Gtk.Box(spacing=4, homogeneous=True)
+        reply_btn = Gtk.Button(child=Adw.ButtonContent(icon_name="mail-reply-sender-symbolic", label="Antworten"))
         reply_btn.add_css_class("flat")
-        reply_btn.add_css_class("circular")
         reply_btn.connect("clicked", lambda _b: self._reply_to_menu_target())
-        box.append(reply_btn)
+        actions.append(reply_btn)
         self._menu_reply_btn = reply_btn
-        copy_btn = Gtk.Button(icon_name="edit-copy-symbolic", tooltip_text="Text kopieren",
-                              valign=Gtk.Align.CENTER)
+        copy_btn = Gtk.Button(child=Adw.ButtonContent(icon_name="edit-copy-symbolic", label="Kopieren"))
         copy_btn.add_css_class("flat")
-        copy_btn.add_css_class("circular")
         copy_btn.connect("clicked", lambda _b: self._copy_reaction_target_text())
-        box.append(copy_btn)
+        actions.append(copy_btn)
         self._reaction_copy_btn = copy_btn
+        box.append(actions)
         self.reaction_popover.set_child(box)
         self.reaction_popover.set_parent(self)
 
@@ -563,9 +563,13 @@ class ChatView(Adw.Bin):
             rect.x, rect.y, rect.width, rect.height = int(point.x), int(point.y), 1, 1
             self.reaction_popover.set_pointing_to(rect)
             self.emoji_chooser.set_pointing_to(rect)
-        self._reaction_choices.set_visible(can_react(item))
-        self._menu_reply_btn.set_visible(can_reply(item))
-        self._reaction_copy_btn.set_visible(bool(item.content))
+        reactions = can_react(item)
+        reply = can_reply(item)
+        copy = bool(item.content)
+        self._reaction_choices.set_visible(reactions)
+        self._menu_reply_btn.set_visible(reply)
+        self._reaction_copy_btn.set_visible(copy)
+        self._menu_separator.set_visible(reactions and (reply or copy))
         self.reaction_popover.popup()
 
     def _show_emoji_chooser(self):
