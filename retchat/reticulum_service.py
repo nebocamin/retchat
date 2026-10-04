@@ -21,6 +21,7 @@ from nomadnet import Conversation
 from nomadnet.Conversation import ConversationMessage
 import RNS
 
+from retchat.contact_uri import Contact, contact_uri
 from retchat.database import Database
 from retchat.nomadnet_pages import PageFetcher
 
@@ -717,6 +718,29 @@ class ReticulumService:
     @property
     def delivery_destination_hex(self) -> str:
         return self.app.lxmf_destination.hash.hex()
+
+    @property
+    def contact_uri(self) -> str:
+        """Own address with public key, as lxma:// link (shown as QR code)."""
+        return contact_uri(self.delivery_destination_hex, self.identity.get_public_key())
+
+    def learn_contact(self, contact: Contact) -> bool:
+        """Remember the identity of a scanned contact link.
+
+        Messages to it can then be encrypted right away, without waiting
+        for an announce. ``contact.public_key`` was checked against the
+        address by parse_contact. An already known destination is left
+        alone (remembering again would drop its announced name). Returns
+        whether the identity is known afterwards.
+        """
+        dest = bytes.fromhex(contact.destination_hash)
+        if RNS.Identity.recall(dest) is not None:
+            return True
+        if contact.public_key is None:
+            return False
+        RNS.Identity.remember(None, dest, contact.public_key)
+        RNS.log(f"Retchat: Learned identity of {contact.destination_hash} from a contact link", RNS.LOG_INFO)
+        return True
 
     @property
     def display_name(self) -> str:

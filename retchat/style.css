@@ -178,6 +178,12 @@ listview.chat-history > row {
     margin: 12px 18px;
 }
 
+/* QR codes (new chat dialog) */
+.qr-scanner-view {
+    border-radius: 12px;
+    background-color: alpha(currentColor, 0.08);
+}
+
 /* Composer */
 .composer {
     padding: 6px 12px;

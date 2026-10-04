@@ -104,6 +104,7 @@ def main():
     shutil.copy(os.path.join(icon_src, "scalable", "apps", "org.selfmade.Retchat.svg"), icons_dir)
     shutil.copy(os.path.join(icon_src, "symbolic", "apps", "org.selfmade.Retchat-symbolic.svg"), symbolic_icons_dir)
     shutil.copy(os.path.join(icon_src, "symbolic", "apps", "org.selfmade.Retchat-globe-symbolic.svg"), symbolic_icons_dir)
+    shutil.copy(os.path.join(icon_src, "symbolic", "apps", "org.selfmade.Retchat-qr-symbolic.svg"), symbolic_icons_dir)
     shutil.copy(os.path.join(BASE_DIR, "org.selfmade.Retchat.metainfo.xml"), metainfo_dir)
 
     # Finalize with flatpak build-finish

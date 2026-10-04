@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- QR code: three finder patterns and a few modules -->
+  <g fill="#222222" fill-rule="evenodd">
+    <path d="M1 1h6v6H1zm1.5 1.5v3h3v-3z"/>
+    <path d="M3.25 3.25h1.5v1.5h-1.5z"/>
+    <path d="M9 1h6v6H9zm1.5 1.5v3h3v-3z"/>
+    <path d="M11.25 3.25h1.5v1.5h-1.5z"/>
+    <path d="M1 9h6v6H1zm1.5 1.5v3h3v-3z"/>
+    <path d="M3.25 11.25h1.5v1.5h-1.5z"/>
+    <path d="M9 9h2v2H9zm4 0h2v2h-2zm-2 2h2v2h-2zm-2 2h2v2H9zm4 0h2v2h-2z"/>
+  </g>
+</svg>

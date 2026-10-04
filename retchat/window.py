@@ -655,7 +655,7 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     # --- Dialog Openers ---
     def _show_new_chat_dialog(self):
-        dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created)
+        dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created, service=self.service)
         dialog.present()
 
     def _on_new_chat_created(self, dest_hash: str, nickname: Optional[str]):

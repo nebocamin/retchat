@@ -30,6 +30,10 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
     to it. Uses the LXMF standard fields (`FIELD_REPLY_TO`, `FIELD_REPLY_QUOTE`), compatible with MeshChatX.
   - React to received messages with emoji (LXMF `FIELD_REACTION`).
   - Rename contacts, copy their address, request a path through the mesh.
+  - Start a chat by address, by pasting a contact link (`lxmf://…`, `lxma://…`) or by scanning a QR code with the
+    camera (or from an image, e.g. a screenshot). The own address can be shown as QR code. Codes contain address
+    and public key (`lxma://`, as in MeshChatX), so a scanned contact can be written to right away, without waiting
+    for an announce; the address is checked against the key.
   - Delete chats from the chat menu, or by right click / long press in the chat list.
 - **Images and files**
   - Images are downscaled before sending and shown inline, with a built-in image viewer.
@@ -158,6 +162,8 @@ retchat/
     ├── models.py                      # GObject model for messages (MessageItem)
     ├── database.py                    # SQLite store for custom names and settings
     ├── reticulum_service.py           # Reticulum / LXMF / NomadNet service and callbacks
+    ├── contact_uri.py                 # Contact links (lxmf://, lxma://): format and verification
+    ├── qr.py                          # Creating and reading QR codes (qrcode, zxing-cpp)
     ├── style.css                      # Libadwaita CSS (bubbles, badges, composer)
     ├── widgets/
     │   ├── chat_history.py            # Gtk.ListView history that keeps the newest message in view
@@ -165,9 +171,11 @@ retchat/
     │   ├── message_bubble.py          # Message bubble with image, files and delivery status
     │   ├── attachment_row.py          # File attachment row (open / save) and file helpers
     │   ├── conversation_row.py        # Row in the chat list
+    │   ├── qr_code_view.py            # QR code drawn sharp at any size
+    │   ├── qr_scanner.py              # Camera (portal/PipeWire or V4L2) with QR reading
     │   └── announce_row.py            # Row in the discover list
     └── dialogs/
-        ├── new_chat_dialog.py         # New chat (address input with validation)
+        ├── new_chat_dialog.py         # New chat: address or link, QR scan, own QR code
         ├── profile_dialog.py          # Own profile and announce
         ├── interfaces_dialog.py       # Reticulum interfaces, TCP hub, propagation node
         └── image_viewer_dialog.py     # Image viewer
