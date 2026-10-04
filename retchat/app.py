@@ -11,6 +11,7 @@ from gi.repository import Gtk, Adw, Gdk, Gio, GLib
 
 from retchat import __version__
 from retchat.database import Database
+from retchat.legal import legal_sections
 from retchat.reticulum_service import ReticulumService, library_versions
 from retchat.widgets.attachment_row import purge_open_copies
 from retchat.window import RetchatWindow
@@ -105,10 +106,17 @@ class RetchatApp(Adw.Application):
             comments="Dezentraler, Ende-zu-Ende-verschlüsselter Chat über das Reticulum-Mesh-Netzwerk (LXMF).",
             website="https://github.com/nebocamin/retchat",
             issue_url="https://github.com/nebocamin/retchat/issues",
+            copyright="© 2026 stereo",
             license_type=Gtk.License.GPL_3_0,
             # "Troubleshooting" page, e.g. for bug reports
             debug_info="\n".join(f"{name} {ver}" for name, ver in library_versions().items()),
         )
+        # Bundled components and their licenses ("Rechtliches")
+        for title, copyright, kind, text in legal_sections():
+            if kind == "gpl3":
+                about.add_legal_section(title, copyright, Gtk.License.GPL_3_0, None)
+            else:
+                about.add_legal_section(title, copyright, Gtk.License.CUSTOM, GLib.markup_escape_text(text))
         about.add_link("Reticulum Network", "https://reticulum.network/")
         about.present(self.get_active_window())
 

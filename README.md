@@ -123,6 +123,9 @@ Retchat hooks into internals of RNS, LXMF and NomadNet (replaced methods, callba
 3. Update the venv (`.venv/bin/pip install --no-deps -r requirements.txt`) and run the tests. `tests/test_library_contract.py` checks every library internal Retchat relies on; if one fails, adapt the hook before releasing. Also read the release notes for behaviour changes the tests can't see.
 4. Rebuild both bundles and update *Tested with* below.
 
+A new dependency also needs an entry in `retchat/legal.py` (about dialog) and, if its wheel ships no license
+file, the text in `data/licenses/<name>.txt`; `tests/test_licenses.py` and the bundle builds check this.
+
 ---
 
 ## Where data is stored
@@ -152,6 +155,8 @@ retchat/
 ├── setup.py                           # Python package definition
 ├── requirements.txt                   # Exact dependency versions for all builds
 ├── tools/check_updates.py             # Lists pins with newer releases on PyPI
+├── tools/collect_licenses.py          # Installs the license texts of all bundled packages
+├── data/licenses/                     # License texts of packages whose wheels ship none
 ├── main.py / retchat.sh               # Entry point / local launcher
 ├── data/icons/
 │   ├── generate_icon.py               # Generates the app icon (ratchet-wheel speech bubble)
@@ -195,4 +200,23 @@ retchat/
 
 ## License
 
-GPL-3.0-or-later, see [LICENSE](LICENSE).
+Retchat is licensed under the GNU GPL, version 3 or later, see [LICENSE](LICENSE).
+`retchat/micron.py` is ported from Nomad Network's Micron parser and, like Nomad Network, licensed under the GNU GPL v3.
+
+The Flatpak bundles include third-party packages under their own licenses; their full texts are installed to
+`/app/share/licenses/org.selfmade.Retchat/` and listed in *About → Legal*:
+
+| Package | License |
+|---|---|
+| Reticulum (`rns`), `lxmf` | Reticulum License: MIT-style, but the software must not be used in systems able to purposefully harm humans, nor in creating AI/ML training datasets |
+| `nomadnet` | GNU GPL v3 (its package metadata says MIT; the license text it ships is the GPL) |
+| `cryptography` | Apache-2.0 or BSD-3-Clause |
+| `msgpack`, `zxing-cpp` | Apache-2.0 |
+| `pillow` | MIT-CMU |
+| `qrcode`, `pyserial`, `pycparser` | BSD-3-Clause |
+| `urwid` | LGPL-2.1 |
+| `cffi` | MIT-0 |
+| `wcwidth` | MIT |
+| `typing_extensions` | PSF-2.0 |
+
+The use restrictions of the Reticulum License apply to RNS and LXMF, and with them to any use of Retchat.

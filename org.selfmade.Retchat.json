@@ -54,6 +54,7 @@
             ],
             "build-commands": [
                 "pip3 install --no-build-isolation --no-deps --prefix=/app .",
+                "python3 tools/collect_licenses.py --app-license LICENSE /app/lib/python3.13/site-packages /app/share/licenses/org.selfmade.Retchat",
                 "install -Dm644 org.selfmade.Retchat.desktop /app/share/applications/org.selfmade.Retchat.desktop",
                 "install -Dm644 data/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg /app/share/icons/hicolor/scalable/apps/org.selfmade.Retchat.svg",
                 "install -Dm644 data/icons/hicolor/symbolic/apps/org.selfmade.Retchat-symbolic.svg /app/share/icons/hicolor/symbolic/apps/org.selfmade.Retchat-symbolic.svg",

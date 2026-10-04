@@ -1,9 +1,11 @@
 """Parser for Micron, the markup language of NomadNet pages.
 
 Ported from NomadNet's MicronParser (nomadnet/ui/textui/MicronParser.py,
-Copyright (c) Mark Qvist, GPLv3) and modified: instead of urwid widgets it
-produces a small, toolkit independent document model that the GTK renderer
-(retchat.widgets.micron_view) displays.
+Copyright (c) Mark Qvist, GNU GPL v3) and modified for Retchat, 2026-09-29
+and later (see the git history): instead of urwid widgets it produces a
+small, toolkit independent document model that the GTK renderer
+(retchat.widgets.micron_view) displays. As a work based on NomadNet, this
+file is licensed under the GNU GPL v3.
 
 Micron is line based and stateful: formatting, colours and alignment set on
 one line stay active on the following lines until they are reset.

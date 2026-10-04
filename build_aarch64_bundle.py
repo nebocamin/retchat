@@ -88,6 +88,13 @@ def main():
         shutil.rmtree(dst_retchat)
     shutil.copytree(src_retchat, dst_retchat)
 
+    # License texts of Retchat and every bundled package
+    subprocess.run([
+        sys.executable, os.path.join(BASE_DIR, "tools", "collect_licenses.py"),
+        "--app-license", os.path.join(BASE_DIR, "LICENSE"),
+        site_packages, os.path.join(files_dir, "share", "licenses", "org.selfmade.Retchat"),
+    ], check=True)
+
     # Launcher executable
     launcher_path = os.path.join(bin_dir, "retchat")
     with open(launcher_path, "w") as f:
