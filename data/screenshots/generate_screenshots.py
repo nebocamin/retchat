@@ -314,7 +314,6 @@ class ShotApp(retchat_app.RetchatApp):
         pump(5000)  # also lets the overlay scroll indicator fade out
 
     def show_discover(self, win):
-        win.sidebar_stack.set_transition_type(Gtk.StackTransitionType.NONE)
         win.sidebar_stack.set_visible_child_name("discover")
         pump(1500)
 
@@ -346,7 +345,6 @@ class ShotApp(retchat_app.RetchatApp):
         phone_list.destroy()
 
         phone_disc = self.new_window(360, 740, dark=True)
-        phone_disc.sidebar_stack.set_transition_type(Gtk.StackTransitionType.NONE)
         phone_disc.sidebar_stack.set_visible_child_name("discover")
         pump(2000)
         discover_shot = snapshot(phone_disc)

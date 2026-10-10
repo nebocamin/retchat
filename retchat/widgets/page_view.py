@@ -19,16 +19,20 @@ _LXMF_HASH_RE = re.compile(r"[0-9a-fA-F]{32}")
 class PageView(Adw.Bin):
     """Shows pages of one NomadNet node at a time, with back/forward history.
 
-    ``service`` provides ``page_fetcher``, ``node_name()``, ``own_node_hex``
-    and ``operator_address()``. ``on_open_chat(lxmf_hash)`` opens a chat
-    (lxmf@ links, "message the operator").
+    ``service`` provides ``page_fetcher``, ``node_name()``, ``own_node_hex``,
+    ``operator_address()`` and the saved nodes (``is_saved_node()``,
+    ``save_node()``, ``forget_node()``). ``on_open_chat(lxmf_hash)`` opens a
+    chat (lxmf@ links, "message the operator"); ``on_nodes_changed()`` is
+    called after the star saved or removed the shown node.
     """
 
-    def __init__(self, service, on_back_clicked: Callable[[], None], on_open_chat: Callable[[str], None]):
+    def __init__(self, service, on_back_clicked: Callable[[], None], on_open_chat: Callable[[str], None],
+                 on_nodes_changed: Optional[Callable[[], None]] = None):
         super().__init__(hexpand=True, vexpand=True)
         self.service = service
         self._on_back_clicked = on_back_clicked
         self._on_open_chat = on_open_chat
+        self._on_nodes_changed = on_nodes_changed
         self._collapsed = False
 
         self._history: List[PageRequest] = []
@@ -70,6 +74,9 @@ class PageView(Adw.Bin):
         node_section.append("Betreiber anschreiben", "page.contact-operator")
         menu.append_section(None, node_section)
         header.pack_end(Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Optionen", menu_model=menu))
+        # Saves the node (not the page): it then appears under "Seiten"
+        self.save_btn = Gtk.Button(icon_name="non-starred-symbolic", action_name="page.save-node")
+        header.pack_end(self.save_btn)
         self._update_back_button()
         return header
 
@@ -104,7 +111,8 @@ class PageView(Adw.Bin):
         self._actions = {}
         for name, handler in (("back", lambda: self._go(-1)), ("forward", lambda: self._go(1)),
                               ("reload", self.reload), ("copy-url", self._copy_url),
-                              ("contact-operator", self._contact_operator)):
+                              ("contact-operator", self._contact_operator),
+                              ("save-node", self._toggle_saved)):
             action = Gio.SimpleAction.new(name, None)
             action.connect("activate", lambda _a, _p, fn=handler: fn())
             group.add_action(action)
@@ -113,7 +121,8 @@ class PageView(Adw.Bin):
 
         shortcuts = Gtk.ShortcutController()
         for trigger, action in (("<Alt>Left", "page.back"), ("<Alt>Right", "page.forward"),
-                                ("F5", "page.reload"), ("<Control>r", "page.reload")):
+                                ("F5", "page.reload"), ("<Control>r", "page.reload"),
+                                ("<Control>d", "page.save-node")):
             shortcuts.add_shortcut(Gtk.Shortcut.new(Gtk.ShortcutTrigger.parse_string(trigger),
                                                     Gtk.NamedAction.new(action)))
         self.add_controller(shortcuts)
@@ -149,6 +158,10 @@ class PageView(Adw.Bin):
     def current_request(self) -> Optional[PageRequest]:
         return self._history[self._index] if 0 <= self._index < len(self._history) else None
 
+    def refresh_saved_state(self):
+        """The saved nodes changed elsewhere (e.g. removed in the sidebar)."""
+        self._update_actions()
+
     def set_back_button_mode(self, is_collapsed: bool):
         self._collapsed = is_collapsed
         self._update_back_button()
@@ -170,6 +183,7 @@ class PageView(Adw.Bin):
             on_done=lambda result: self._on_done(result, push, index),
             use_cache=use_cache,
         )
+        self._update_actions()  # e.g. the star, already while loading
 
     def _go(self, step: int):
         target = self._index + step
@@ -300,6 +314,11 @@ class PageView(Adw.Bin):
         self._actions["copy-url"].set_enabled(request is not None)
         own = request is not None and request.node_hex == self.service.own_node_hex
         self._actions["contact-operator"].set_enabled(request is not None and not own)
+        self._actions["save-node"].set_enabled(request is not None and not own)
+        saved = request is not None and self.service.is_saved_node(request.node_hex)
+        self.save_btn.set_icon_name("starred-symbolic" if saved else "non-starred-symbolic")
+        self.save_btn.set_tooltip_text("Node gespeichert – entfernen (Strg+D)" if saved
+                                       else "Node speichern (Strg+D)")
         self._update_back_button()
 
     def _update_back_button(self):
@@ -339,7 +358,33 @@ class PageView(Adw.Bin):
         else:
             self._toast("Die Adresse des Betreibers ist nicht bekannt")
 
-    def _toast(self, text: str):
+    def _toggle_saved(self):
+        request = self.current_request or self._loading
+        if request is None or request.node_hex == self.service.own_node_hex:
+            return
+        node = request.node_hex
+        if self.service.is_saved_node(node):
+            name = self.service.forget_node(node)
+            self._changed()
+            self._toast(f"«{name or self._node_title(request)}» entfernt",
+                        undo=lambda: self.service.save_node(node, name))
+        else:
+            self.service.save_node(node)
+            self._changed()
+            self._toast(f"«{self._node_title(request)}» unter Seiten gespeichert",
+                        undo=lambda: self.service.forget_node(node))
+
+    def _changed(self):
+        self._update_actions()
+        if self._on_nodes_changed is not None:
+            self._on_nodes_changed()
+
+    def _toast(self, text: str, undo: Optional[Callable[[], None]] = None):
         overlay = self.get_ancestor(Adw.ToastOverlay)
-        if overlay is not None:
-            overlay.add_toast(Adw.Toast(title=text, timeout=3))
+        if overlay is None:
+            return
+        toast = Adw.Toast(title=text, timeout=3)
+        if undo is not None:
+            toast.set_button_label("Rückgängig")
+            toast.connect("button-clicked", lambda _t: (undo(), self._changed()))
+        overlay.add_toast(toast)

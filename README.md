@@ -49,6 +49,14 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   - The list is updated every 5 seconds while it is shown, newest announce on top; while hidden it is not
     touched and catches up when you open it.
   - Start a chat with a single click.
+- **NomadNet pages**
+  - Browse the pages of NomadNet nodes, with back/forward history.
+  - Save a node with the star in the page view (Ctrl+D); saved nodes are listed under *Seiten* in the sidebar.
+    They are stored in NomadNet's directory, so the NomadNet terminal client shows them as saved nodes too.
+- **The “+” button**
+  - Opens an address, a contact link (`lxmf://`, `lxma://`) or a page link (`nomadnetwork://`), typed, pasted or
+    scanned as QR code. Retchat recognises whether an address is a contact (chat) or a node (its pages are opened,
+    nothing is saved); an unknown address is searched in the network first, and if it isn't found you choose.
 - **Message sync**
   - Fetch messages that were stored for you on an LXMF propagation node while you were offline (main menu → *Nachrichten synchronisieren*).
 - **Identity and interfaces**
@@ -178,11 +186,12 @@ retchat/
     │   ├── message_bubble.py          # Message bubble with image, files and delivery status
     │   ├── attachment_row.py          # File attachment row (open / save) and file helpers
     │   ├── conversation_row.py        # Row in the chat list
+    │   ├── node_row.py                # Row in the list of saved nodes
     │   ├── qr_code_view.py            # QR code drawn sharp at any size
     │   ├── qr_scanner.py              # Camera (portal/PipeWire or V4L2) with QR reading
     │   └── announce_row.py            # Row in the discover list
     └── dialogs/
-        ├── new_chat_dialog.py         # New chat: address or link, QR scan, own QR code
+        ├── new_chat_dialog.py         # “+”: open an address or link (chat or page), QR scan, own QR code
         ├── profile_dialog.py          # Own profile and announce
         ├── interfaces_dialog.py       # Reticulum interfaces, TCP hub, propagation node
         └── image_viewer_dialog.py     # Image viewer

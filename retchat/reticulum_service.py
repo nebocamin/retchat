@@ -1580,6 +1580,129 @@ class ReticulumService:
             return self.operator_address(dest_hex) or dest_hex
         return dest_hex
 
+    # --- Saved nodes (NomadNet's directory, shared with the terminal client) -------
+
+    def _directory(self):
+        return getattr(self.app, "directory", None)
+
+    def saved_nodes(self) -> List[Dict[str, Any]]:
+        """Saved NomadNet nodes: [{"destination_hash", "name", "hops"}], sorted by name.
+
+        These are the directory entries hosting a node, NomadNet's "saved
+        nodes"; the terminal client shows the same list.
+        """
+        directory = self._directory()
+        if directory is None:
+            return []
+        out = []
+        for entry in directory.known_nodes():
+            dest_hex = entry.source_hash.hex()
+            hops = None
+            try:
+                h = RNS.Transport.hops_to(entry.source_hash)
+                if h != RNS.Transport.PATHFINDER_M:
+                    hops = h
+            except Exception:
+                pass
+            out.append({"destination_hash": dest_hex,
+                        "name": entry.display_name or self.node_name(dest_hex),
+                        "hops": hops})
+        out.sort(key=lambda n: ((n["name"] or "").lower(), n["destination_hash"]))
+        return out
+
+    def is_saved_node(self, node_hex: str) -> bool:
+        directory = self._directory()
+        if directory is None:
+            return False
+        entry = directory.find(bytes.fromhex(node_hex.strip().lower()))
+        return entry is not None and entry.hosts_node
+
+    def save_node(self, node_hex: str, name: Optional[str] = None):
+        """Save a node, keeping an existing directory entry (e.g. its trust level).
+
+        New entries keep the default trust level: NomadNet picks the
+        propagation node among *trusted* saved nodes, a bookmark shouldn't
+        change that.
+        """
+        from nomadnet.Directory import DirectoryEntry
+        directory = self._directory()
+        if directory is None:
+            return
+        node_hex = node_hex.strip().lower()
+        source_hash = bytes.fromhex(node_hex)
+        name = (name or "").strip() or self.node_name(node_hex)
+        entry = directory.find(source_hash)
+        if entry is None:
+            entry = DirectoryEntry(source_hash, display_name=name, hosts_node=True)
+        else:
+            entry.hosts_node = True
+            if name and not entry.display_name:
+                entry.display_name = name
+        directory.remember(entry)  # also saves to disk
+
+    def rename_node(self, node_hex: str, name: str):
+        directory = self._directory()
+        entry = directory.find(bytes.fromhex(node_hex.strip().lower())) if directory is not None else None
+        if entry is not None:
+            entry.display_name = name.strip() or None
+            directory.save_to_disk()
+
+    def forget_node(self, node_hex: str) -> Optional[str]:
+        """Remove a node from the saved ones; returns its saved name (for undo).
+
+        An entry with a trust level or notes set in NomadNet stays in the
+        directory, only no longer as a saved node.
+        """
+        from nomadnet.Directory import DirectoryEntry
+        directory = self._directory()
+        if directory is None:
+            return None
+        source_hash = bytes.fromhex(node_hex.strip().lower())
+        entry = directory.find(source_hash)
+        if entry is None:
+            return None
+        name = entry.display_name
+        if entry.trust_level == DirectoryEntry.UNKNOWN and not entry.notes:
+            directory.forget(source_hash)
+        else:
+            entry.hosts_node = False
+        directory.save_to_disk()  # forget() doesn't save
+        return name
+
+    def address_kind(self, dest_hex: str) -> Tuple[str, Optional[str]]:
+        """What an address is: (kind, name) with kind "contact", "node",
+        "propagation", "identity" (an identity hash: chat and node are both
+        possible, see addresses_for_identity) or "unknown" (not heard of yet).
+        """
+        dest_hex = dest_hex.strip().lower()
+        dest = bytes.fromhex(dest_hex)
+        if dest_hex == self.delivery_destination_hex:
+            return "contact", self.display_name
+        identity = RNS.Identity.recall(dest)
+        if identity is not None:
+            def matches(aspect):
+                return RNS.Destination.hash_from_name_and_identity(aspect, identity) == dest
+            if matches("nomadnetwork.node"):
+                return "node", self.node_name(dest_hex)
+            if matches("lxmf.delivery"):
+                app_data = RNS.Identity.recall_app_data(dest)
+                return "contact", LXMF.display_name_from_app_data(app_data) if app_data else None
+            if matches("lxmf.propagation"):
+                return "propagation", None
+        if RNS.Identity.recall(dest, from_identity_hash=True) is not None:
+            return "identity", None
+        if dest_hex in self._node_names:
+            return "node", self._node_names[dest_hex]
+        return "unknown", None
+
+    def addresses_for_identity(self, identity_hex: str) -> Dict[str, str]:
+        """Chat and node address of a known identity hash."""
+        identity = RNS.Identity.recall(bytes.fromhex(identity_hex.strip().lower()), from_identity_hash=True)
+        if identity is None:
+            return {}
+        return {kind: RNS.Destination.hash_from_name_and_identity(aspect, identity).hex()
+                for kind, aspect in (("contact", "lxmf.delivery"), ("node", "nomadnetwork.node"))}
+
     def request_path(
         self,
         dest_hex: str,

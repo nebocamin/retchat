@@ -14,9 +14,10 @@ from retchat.dialogs.interfaces_dialog import InterfacesDialog
 from retchat.dialogs.new_chat_dialog import NewChatDialog
 from retchat.dialogs.profile_dialog import ProfileDialog
 from retchat.reticulum_service import ReticulumService
-from retchat.widgets.announce_row import AnnounceRow
+from retchat.widgets.announce_row import NODE_ICON, AnnounceRow
 from retchat.widgets.chat_view import ChatView
 from retchat.widgets.conversation_row import ConversationRow
+from retchat.widgets.node_row import NodeRow
 from retchat.widgets.page_view import PageView
 
 
@@ -83,6 +84,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             Adw.BreakpointCondition.parse("max-width: 320px")
         )
         narrow_bp.add_setter(self.split_view, "min-sidebar-width", 220.0)
+        narrow_bp.add_setter(self.sidebar_switcher, "display-mode", Adw.InlineViewSwitcherDisplayMode.ICONS)
         self.add_breakpoint(narrow_bp)
 
         self.split_view.connect("notify::collapsed", self._on_split_collapsed_changed)
@@ -140,6 +142,12 @@ class RetchatWindow(Adw.ApplicationWindow):
         action_open_page = Gio.SimpleAction.new("announce-open-page", GLib.VariantType.new("s"))
         action_open_page.connect("activate", lambda _a, p: self.open_page(p.get_string()))
         self.add_action(action_open_page)
+
+        # Saved nodes: rename / remove (target: node hash)
+        for name, handler in (("rename-node", self._rename_node), ("forget-node", self._forget_node)):
+            action = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
+            action.connect("activate", lambda _a, p, fn=handler: fn(p.get_string()))
+            self.add_action(action)
 
         # Action: Open a nomadnetwork:// link from a message (win.open-nomadnet-url, target: URL)
         action_open_url = Gio.SimpleAction.new("open-nomadnet-url", GLib.VariantType.new("s"))
@@ -205,7 +213,7 @@ class RetchatWindow(Adw.ApplicationWindow):
         # New chat button (+)
         self.add_btn = Gtk.Button(icon_name="list-add-symbolic")
         self.add_btn.add_css_class("suggested-action")
-        self.add_btn.set_tooltip_text("Neuen Chat starten")
+        self.add_btn.set_tooltip_text("Chat starten oder Seite öffnen")
         self.add_btn.connect("clicked", lambda _b: self._show_new_chat_dialog())
         header.pack_end(self.add_btn)
 
@@ -221,23 +229,18 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.search_entry.connect("search-changed", self._on_search_changed)
         sidebar_box.append(self.search_entry)
 
-        # View Switcher (Chats vs Entdecken)
-        stack_switcher = Gtk.StackSwitcher()
-        stack_switcher.add_css_class("compact-switcher")
-        stack_switcher.set_halign(Gtk.Align.CENTER)
-        stack_switcher.set_margin_top(4)
-        stack_switcher.set_margin_bottom(6)
-
-        self.sidebar_stack = Gtk.Stack()
-        self.sidebar_stack.set_transition_type(Gtk.StackTransitionType.SLIDE_LEFT_RIGHT)
+        # View switcher: Chats | Seiten | Entdecken. Labels fit a 360 px phone
+        # even at 140 % text (165 px); very narrow windows show icons only.
+        self.sidebar_stack = Adw.ViewStack()
         # Only measure the visible tab: a homogeneous stack measures the
         # hidden list (up to 200 rows) on every change, too. The sidebar's
         # width comes from the split view, so it doesn't jump between tabs.
         self.sidebar_stack.set_hhomogeneous(False)
         self.sidebar_stack.set_vhomogeneous(False)
         self.sidebar_stack.connect("notify::visible-child-name", self._on_sidebar_tab_changed)
-        stack_switcher.set_stack(self.sidebar_stack)
-        sidebar_box.append(stack_switcher)
+        self.sidebar_switcher = Adw.InlineViewSwitcher(stack=self.sidebar_stack, halign=Gtk.Align.CENTER,
+                                                       margin_top=4, margin_bottom=6)
+        sidebar_box.append(self.sidebar_switcher)
 
         # Tab 1: Chats
         conv_scroll = Gtk.ScrolledWindow()
@@ -271,7 +274,26 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.conv_list_box.add_controller(long_press)
 
         conv_scroll.set_child(self.conv_list_box)
-        self.sidebar_stack.add_titled(conv_scroll, "chats", "Chats")
+        self.sidebar_stack.add_titled_with_icon(conv_scroll, "chats", "Chats", "org.selfmade.Retchat-symbolic")
+
+        # Tab 2: Seiten (saved NomadNet nodes)
+        nodes_scroll = Gtk.ScrolledWindow(vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.nodes_list_box = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.nodes_list_box.add_css_class("navigation-sidebar")
+        self.nodes_list_box.connect("row-activated", lambda _l, row: self.open_page(row.dest_hash))
+        self.nodes_empty_page = Adw.StatusPage(icon_name=NODE_ICON, title="Keine gespeicherten Seiten")
+        self.nodes_empty_page.set_description("Öffne eine NomadNet-Seite und speichere ihre Node mit dem Stern.")
+        self.nodes_list_box.set_placeholder(self.nodes_empty_page)
+        self.nodes_list_box.connect("map", lambda _w: self._load_saved_nodes())
+        nodes_right_click = Gtk.GestureClick(button=Gdk.BUTTON_SECONDARY)
+        nodes_right_click.connect("pressed", lambda g, _n, x, y: self._on_node_context_requested(g, x, y))
+        self.nodes_list_box.add_controller(nodes_right_click)
+        nodes_long_press = Gtk.GestureLongPress(touch_only=True)
+        nodes_long_press.connect("pressed", self._on_node_context_requested)
+        self.nodes_list_box.add_controller(nodes_long_press)
+        self.node_rows: Dict[str, NodeRow] = {}
+        nodes_scroll.set_child(self.nodes_list_box)
+        self.sidebar_stack.add_titled_with_icon(nodes_scroll, "pages", "Seiten", NODE_ICON)
 
         # Tab 2: Entdecken (Mesh Peers)
         announce_scroll = Gtk.ScrolledWindow()
@@ -299,7 +321,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         self.announce_list_box.connect("map", lambda _w: self._refresh_announces_if_needed())
 
         announce_scroll.set_child(self.announce_list_box)
-        self.sidebar_stack.add_titled(announce_scroll, "discover", "Entdecken")
+        self.sidebar_stack.add_titled_with_icon(announce_scroll, "discover", "Entdecken",
+                                                "network-transmit-receive-symbolic")
 
         sidebar_box.append(self.sidebar_stack)
         return sidebar_box
@@ -351,6 +374,7 @@ class RetchatWindow(Adw.ApplicationWindow):
             self.service,
             on_back_clicked=self._on_chat_back_clicked,
             on_open_chat=self._open_chat_with,
+            on_nodes_changed=self._load_saved_nodes,
         )
         self.content_stack.add_named(self.page_view, "page")
 
@@ -397,6 +421,8 @@ class RetchatWindow(Adw.ApplicationWindow):
         active_tab = self.sidebar_stack.get_visible_child_name() if hasattr(self, "sidebar_stack") else "chats"
         if active_tab == "discover":
             self._load_announces(query=q if q else None)
+        elif active_tab == "pages":
+            self._load_saved_nodes()
         else:
             self._load_conversations(query=q if q else None)
 
@@ -406,6 +432,9 @@ class RetchatWindow(Adw.ApplicationWindow):
         if active_tab == "discover":
             self.search_entry.set_placeholder_text("Peers & Ankündigungen durchsuchen...")
             self._refresh_announces_if_needed()
+        elif active_tab == "pages":
+            self.search_entry.set_placeholder_text("Gespeicherte Seiten durchsuchen...")
+            self._load_saved_nodes()
         else:
             self.search_entry.set_placeholder_text("Chats durchsuchen...")
             self._load_conversations(query=q if q else None)
@@ -658,7 +687,8 @@ class RetchatWindow(Adw.ApplicationWindow):
 
     # --- Dialog Openers ---
     def _show_new_chat_dialog(self):
-        dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created, service=self.service)
+        dialog = NewChatDialog(self, on_chat_created=self._on_new_chat_created, service=self.service,
+                               on_open_page=self.open_page_url)
         dialog.present()
 
     def _on_new_chat_created(self, dest_hash: str, nickname: Optional[str]):
@@ -733,6 +763,72 @@ class RetchatWindow(Adw.ApplicationWindow):
                 else:
                     self._show_toast("Kontaktname zurückgesetzt")
 
+        dialog.connect("response", on_response)
+        dialog.present(self)
+
+    # --- Saved nodes ("Seiten") ---
+    def _load_saved_nodes(self):
+        q = self.search_entry.get_text().strip().lower() if hasattr(self, "search_entry") else ""
+        nodes = [n for n in self.service.saved_nodes()
+                 if not q or q in (n["name"] or "").lower() or q in n["destination_hash"]]
+        if q:
+            self.nodes_empty_page.set_title("Keine Seiten gefunden")
+            self.nodes_empty_page.set_description(f"Keine gespeicherten Seiten für «{q}».")
+        else:
+            self.nodes_empty_page.set_title("Keine gespeicherten Seiten")
+            self.nodes_empty_page.set_description("Öffne eine NomadNet-Seite und speichere ihre Node mit dem Stern.")
+        _remove_rows(self.nodes_list_box)
+        self.node_rows = {}
+        for node in nodes:
+            row = NodeRow(node)
+            self.node_rows[node["destination_hash"]] = row
+            self.nodes_list_box.append(row)
+
+    def _on_node_context_requested(self, gesture: Gtk.Gesture, x: float, y: float):
+        row = self.nodes_list_box.get_row_at_y(int(y))
+        if not isinstance(row, NodeRow):
+            return
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        menu = Gio.Menu()
+        for label, action in (("Umbenennen…", "win.rename-node"), ("Entfernen", "win.forget-node")):
+            item = Gio.MenuItem.new(label, None)
+            item.set_action_and_target_value(action, GLib.Variant.new_string(row.dest_hash))
+            menu.append_item(item)
+        self.conv_context_menu.set_menu_model(menu)
+        ok, point = self.nodes_list_box.compute_point(self._context_menu_anchor, Graphene.Point().init(x, y))
+        if ok:
+            rect = Gdk.Rectangle()
+            rect.x, rect.y, rect.width, rect.height = int(point.x), int(point.y), 1, 1
+            self.conv_context_menu.set_pointing_to(rect)
+        self.conv_context_menu.popup()
+
+    def _saved_nodes_changed(self):
+        self._load_saved_nodes()
+        self.page_view.refresh_saved_state()
+
+    def _forget_node(self, node_hex: str):
+        name = self.service.forget_node(node_hex)
+        self._saved_nodes_changed()
+        toast = Adw.Toast(title=f"«{name or node_hex[:8]}» entfernt", button_label="Rückgängig", timeout=4)
+        toast.connect("button-clicked", lambda _t: (self.service.save_node(node_hex, name), self._saved_nodes_changed()))
+        self.toast_overlay.add_toast(toast)
+
+    def _rename_node(self, node_hex: str):
+        row = self.node_rows.get(node_hex)
+        current = row.name if row is not None else ""
+        dialog = Adw.AlertDialog(heading="Seite umbenennen", body="Name, unter dem die Node gespeichert ist")
+        entry = Gtk.Entry(text=current, activates_default=True)
+        dialog.set_extra_child(entry)
+        dialog.add_response("cancel", "Abbrechen")
+        dialog.add_response("rename", "Umbenennen")
+        dialog.set_response_appearance("rename", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("rename")
+        dialog.set_close_response("cancel")
+
+        def on_response(_d, response):
+            if response == "rename":
+                self.service.rename_node(node_hex, entry.get_text())
+                self._saved_nodes_changed()
         dialog.connect("response", on_response)
         dialog.present(self)
 
