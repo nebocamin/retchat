@@ -1,5 +1,6 @@
 """Browser for NomadNet pages, shown in place of the chat view."""
 
+import os
 import re
 from typing import Callable, List, Optional
 
@@ -10,7 +11,9 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from retchat import micron
 from retchat.micron import Link
-from retchat.nomadnet_pages import URL_SCHEME, PageRequest, PageResult, parse_url, store_cached, uncache
+from retchat.nomadnet_pages import (URL_SCHEME, DownloadResult, PageRequest, PageResult, file_name_for, parse_url,
+                                    store_cached, uncache)
+from retchat.widgets.attachment_row import is_executable
 from retchat.widgets.micron_view import MicronView
 
 _LXMF_HASH_RE = re.compile(r"[0-9a-fA-F]{32}")
@@ -39,9 +42,14 @@ class PageView(Adw.Bin):
         self._index = -1
         self._loading: Optional[PageRequest] = None
         self._doc: Optional[micron.Document] = None
+        self._download: Optional[PageRequest] = None  # file being downloaded
 
         toolbar_view = Adw.ToolbarView()
         toolbar_view.add_top_bar(self._build_header())
+        # Download in progress, with "Abbrechen"
+        self.download_banner = Adw.Banner(button_label="Abbrechen")
+        self.download_banner.connect("button-clicked", lambda _b: self.cancel_download())
+        toolbar_view.add_top_bar(self.download_banner)
         toolbar_view.set_content(self._build_content())
         self.set_child(toolbar_view)
 
@@ -290,7 +298,7 @@ class PageView(Adw.Bin):
             self._toast(str(e))
             return
         if request.is_file:
-            self._toast("Datei-Downloads werden noch nicht unterstützt")
+            self.download(request)
             return
         self._navigate(request)
 
@@ -358,6 +366,77 @@ class PageView(Adw.Bin):
         else:
             self._toast("Die Adresse des Betreibers ist nicht bekannt")
 
+    # --- Downloads ----------------------------------------------------------------------
+
+    @property
+    def downloading(self) -> bool:
+        return self._download is not None
+
+    def download(self, request: PageRequest):
+        """Download a file of a node into the downloads folder (one at a time)."""
+        if self._download is not None:
+            self._toast(f"Es läuft bereits ein Download: «{file_name_for(self._download)}»")
+            return
+        self._download = request
+        name = file_name_for(request)
+        self._show_download_status(name, "Wird angefordert…", None)
+        self.service.file_downloader.download(
+            request, self.service.downloads_dir,
+            on_status=lambda text, fraction: self._show_download_status(name, text, fraction),
+            on_done=self._on_download_done,
+        )
+
+    def cancel_download(self):
+        if self._download is None:
+            return
+        name = file_name_for(self._download)
+        self._download = None
+        self.service.file_downloader.cancel()
+        self.download_banner.set_revealed(False)
+        self._toast(f"Download von «{name}» abgebrochen")
+
+    def _show_download_status(self, name: str, text: str, fraction: Optional[float]):
+        if self._download is None:
+            return
+        name = GLib.markup_escape_text(name)
+        if fraction:  # receiving: name and progress are enough (keeps it short on phones)
+            self.download_banner.set_title(f"«{name}» {int(fraction * 100)} %")
+        else:
+            self.download_banner.set_title(f"«{name}»: {GLib.markup_escape_text(text)}")
+        self.download_banner.set_revealed(True)
+
+    def _on_download_done(self, result: DownloadResult):
+        self._download = None
+        self.download_banner.set_revealed(False)
+        if result.error or not result.path:
+            self._toast(f"Download fehlgeschlagen: {result.error or 'Unbekannter Fehler'}")
+            return
+        path = result.path
+        name = os.path.basename(path)
+        folder = os.path.basename(os.path.dirname(path))
+        if is_executable(name, path):
+            # As with attachments: executables and scripts aren't opened
+            self._toast(f"«{name}» in {folder} gespeichert", button="Im Ordner zeigen",
+                        on_button=lambda: self._launch(path, folder_only=True))
+        else:
+            self._toast(f"«{name}» in {folder} gespeichert", button="Öffnen",
+                        on_button=lambda: self._launch(path))
+
+    def _launch(self, path: str, folder_only: bool = False):
+        launcher = Gtk.FileLauncher(file=Gio.File.new_for_path(path))
+
+        def finished(source, result):
+            try:
+                (source.open_containing_folder_finish if folder_only else source.launch_finish)(result)
+            except GLib.Error as e:
+                if not e.matches(Gtk.DialogError.quark(), Gtk.DialogError.DISMISSED):
+                    self._toast(f"Konnte nicht geöffnet werden: {e.message}")
+
+        if folder_only:
+            launcher.open_containing_folder(self.get_root(), None, finished)
+        else:
+            launcher.launch(self.get_root(), None, finished)
+
     def _toggle_saved(self):
         request = self.current_request or self._loading
         if request is None or request.node_hex == self.service.own_node_hex:
@@ -379,12 +458,16 @@ class PageView(Adw.Bin):
         if self._on_nodes_changed is not None:
             self._on_nodes_changed()
 
-    def _toast(self, text: str, undo: Optional[Callable[[], None]] = None):
+    def _toast(self, text: str, undo: Optional[Callable[[], None]] = None,
+               button: Optional[str] = None, on_button: Optional[Callable[[], None]] = None):
         overlay = self.get_ancestor(Adw.ToastOverlay)
         if overlay is None:
             return
-        toast = Adw.Toast(title=text, timeout=3)
+        toast = Adw.Toast(title=GLib.markup_escape_text(text), timeout=5 if button else 3)
         if undo is not None:
             toast.set_button_label("Rückgängig")
             toast.connect("button-clicked", lambda _t: (undo(), self._changed()))
+        elif button is not None:
+            toast.set_button_label(button)
+            toast.connect("button-clicked", lambda _t: on_button())
         overlay.add_toast(toast)

@@ -4,7 +4,8 @@ Follows NomadNet's Browser (nomadnet/ui/textui/Browser.py, GPLv3), without
 its urwid UI: find a path to the node, open an RNS link, optionally identify,
 and request the page path. Pages are cached in NomadNet's cache directory in
 the same format, so Retchat and the NomadNet terminal client share it.
-Pages of the own node (if Retchat runs one) are served locally.
+Pages of the own node (if Retchat runs one) are served locally. Files
+("/file/…" paths) are downloaded by FileDownloader.
 
 URL format (as in NomadNet): ``<node hash>[:<path>][`var=value|var2=value2]``.
 ``:<path>`` without hash refers to the current node, a bare hash to its
@@ -12,8 +13,10 @@ index page.
 """
 
 import inspect
+import io
 import os
 import re
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -181,6 +184,72 @@ class PageResult:
     extra: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class DownloadResult:
+    request: PageRequest
+    path: Optional[str] = None  # where the file was saved
+    error: Optional[str] = None
+
+
+def file_name_for(request: PageRequest) -> str:
+    """Name of a file from its path (until the node sends the real one)."""
+    return safe_file_name(request.path.rsplit("/", 1)[-1])
+
+
+def safe_file_name(name: Any, fallback: str = "download") -> str:
+    """A name from a node, usable as file name (no directories, no hidden files)."""
+    if isinstance(name, (bytes, bytearray)):
+        name = bytes(name).decode("utf-8", errors="replace")
+    name = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", str(name or ""))
+    name = re.split(r"[/\\]", name)[-1].lstrip(".").strip()
+    if len(name) > 200:
+        base, ext = os.path.splitext(name)
+        name = base[:200 - len(ext[:16])] + ext[:16]
+    return name or fallback
+
+
+def unique_path(directory: str, name: str) -> str:
+    """``name`` in ``directory``, as "name (1).ext" etc. if it exists."""
+    base, ext = os.path.splitext(name)
+    candidate, n = os.path.join(directory, name), 0
+    while os.path.lexists(candidate):
+        n += 1
+        candidate = os.path.join(directory, f"{base} ({n}){ext}")
+    return candidate
+
+
+def save_download(response: Any, metadata: Any, request: PageRequest, directory: str) -> str:
+    """Save a file response of a node; returns the path. Raises _FetchError.
+
+    Nodes answer file requests with an open file (RNS sends it as a resource
+    with the name in its metadata; RNS deletes the file once the response
+    callback returns, so this must run inside it), older ones with
+    [name, data]. Bytes are saved under the name from the path.
+    """
+    os.makedirs(directory, exist_ok=True)
+    if isinstance(response, io.IOBase) and hasattr(response, "name"):
+        name = metadata.get("name") if isinstance(metadata, dict) else None
+        if name is None and isinstance(metadata, dict):
+            name = metadata.get(b"name")
+        target = unique_path(directory, safe_file_name(name, file_name_for(request)))
+        try:
+            response.close()
+        except Exception:
+            pass
+        shutil.move(response.name, target)
+        return target
+    if isinstance(response, (list, tuple)) and len(response) >= 2 and isinstance(response[1], (bytes, bytearray)):
+        name, data = safe_file_name(response[0], file_name_for(request)), bytes(response[1])
+    elif isinstance(response, (bytes, bytearray)):
+        name, data = file_name_for(request), bytes(response)
+    else:
+        raise _FetchError("Die Node hat keine Datei geliefert.")
+    target = unique_path(directory, name)
+    with open(target, "wb") as f:
+        f.write(data)
+    return target
+
+
 class PageFetcher:
     """Loads pages in a worker thread; one request at a time.
 
@@ -249,18 +318,24 @@ class PageFetcher:
             RNS.log(f"Retchat: Error loading page {request.url}: {e}", RNS.LOG_ERROR)
             done(PageResult(request, error=f"Fehler beim Laden: {e}"))
 
-    def _serve_locally(self, request: PageRequest) -> PageResult:
-        """A page of the own node, answered by its request handler without a link."""
+    def _local_response(self, request: PageRequest) -> Any:
+        """Answer of the own node's request handler for ``request``, without a link."""
         destination = self.app.node.destination
         handler = destination.request_handlers.get(RNS.Identity.truncated_hash(request.path.encode("utf-8")))
         if handler is None:
-            return PageResult(request, error="Diese Seite gibt es auf deiner Node nicht.")
+            return None
         generator = handler[1]
         args = [request.path, request.data, os.urandom(16)]
         if len(inspect.signature(generator).parameters) == 6:
             args.append(None)  # link id
         args += [self.app.identity, time.time()]
-        data = generator(*args)
+        return generator(*args)
+
+    def _serve_locally(self, request: PageRequest) -> PageResult:
+        """A page of the own node, answered by its request handler without a link."""
+        data = self._local_response(request)
+        if data is None:
+            return PageResult(request, error="Diese Seite gibt es auf deiner Node nicht.")
         if not isinstance(data, (bytes, bytearray)):
             return PageResult(request, error="Die Seite konnte nicht erzeugt werden.")
         return PageResult(request, bytes(data))
@@ -308,18 +383,40 @@ class PageFetcher:
         return link
 
     def _fetch_remote(self, request: PageRequest, status) -> PageResult:
+        outcome: Dict[str, Any] = {}
+
+        def on_response(receipt):
+            outcome["data"] = receipt.response
+
         try:
             link = self._get_link(request.node, status)
+            self._request(link, request, status, "Seite", on_response)
         except _FetchError as e:
             return PageResult(request, error=str(e))
+        data = outcome.get("data")
+        if isinstance(data, (bytes, bytearray)):
+            return PageResult(request, bytes(data))
+        if isinstance(data, str):
+            return PageResult(request, data.encode("utf-8"))
+        return PageResult(request, error="Die Node hat keine Seite geliefert.")
 
-        status("Seite wird angefordert…")
+    def _request(self, link: RNS.Link, request: PageRequest, status, what: str,
+                 on_response: Callable[[Any], None]):
+        """Send ``request`` over ``link`` and wait; ``on_response(receipt)``
+        runs in RNS's thread. Raises _FetchError."""
+        status(f"{what} wird angefordert…")
         finished = threading.Event()
         outcome: Dict[str, Any] = {}
         last_activity = [time.time()]
 
         def response(receipt):
-            outcome["data"] = receipt.response
+            try:
+                on_response(receipt)
+            except _FetchError as e:
+                outcome["error"] = str(e)
+            except Exception as e:
+                RNS.log(f"Retchat: Error handling the response to {request.url}: {e}", RNS.LOG_ERROR)
+                outcome["error"] = f"Fehler beim Speichern: {e}"
             finished.set()
 
         def failed(receipt):
@@ -329,7 +426,7 @@ class PageFetcher:
         def progress(receipt):
             last_activity[0] = time.time()
             try:
-                status("Seite wird empfangen…", float(receipt.get_progress()))
+                status(f"{what} wird empfangen…", float(receipt.get_progress()))
             except Exception:
                 pass
 
@@ -337,28 +434,24 @@ class PageFetcher:
                                failed_callback=failed, progress_callback=progress)
         if not receipt:
             self._teardown()
-            return PageResult(request, error="Die Anfrage konnte nicht gesendet werden.")
+            raise _FetchError("Die Anfrage konnte nicht gesendet werden.")
 
         # RNS usually times the request out itself (failed callback), but not
         # always (seen with real nodes): give up after a while without progress.
         while not finished.wait(0.5):
             if link.status == RNS.Link.CLOSED:
                 self._link = None
-                return PageResult(request, error="Die Verbindung zur Node wurde getrennt.")
+                raise _FetchError("Die Verbindung zur Node wurde getrennt.")
             if time.time() - last_activity[0] > REQUEST_IDLE_LIMIT:
                 self._teardown()
-                return PageResult(request, error="Zeitüberschreitung: Die Node antwortet nicht.")
+                raise _FetchError("Zeitüberschreitung: Die Node antwortet nicht.")
 
         if outcome.get("failed"):
             self._teardown()
-            return PageResult(request, error="Keine Antwort von der Node. Die Seite gibt es "
-                                             "vielleicht nicht, oder die Verbindung ist zu langsam.")
-        data = outcome.get("data")
-        if isinstance(data, (bytes, bytearray)):
-            return PageResult(request, bytes(data))
-        if isinstance(data, str):
-            return PageResult(request, data.encode("utf-8"))
-        return PageResult(request, error="Die Node hat keine Seite geliefert.")
+            raise _FetchError(f"Keine Antwort von der Node. {'Die Seite' if what == 'Seite' else 'Die Datei'} "
+                              "gibt es vielleicht nicht, oder die Verbindung ist zu langsam.")
+        if outcome.get("error"):
+            raise _FetchError(outcome["error"])
 
     def _teardown(self):
         link, self._link = self._link, None
@@ -371,3 +464,56 @@ class PageFetcher:
 
 class _FetchError(Exception):
     pass
+
+
+class FileDownloader(PageFetcher):
+    """Downloads files of nodes (``/file/…`` paths), one at a time.
+
+    Uses its own link, so browsing (which replaces the page fetcher's
+    request and link) doesn't interrupt a download. ``download()`` reports
+    with ``on_status(text, fraction)`` and ``on_done(DownloadResult)``;
+    cancel() stops it.
+    """
+
+    def download(self, request: PageRequest, directory: str,
+                 on_status: Callable[[str, Optional[float]], None],
+                 on_done: Callable[[DownloadResult], None]):
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+
+        def report(fn, *args):
+            if generation == self._generation:
+                fn(*args)
+            return False
+
+        def status(text: str, fraction: Optional[float] = None):
+            self._dispatch(report, on_status, text, fraction)
+
+        def done(result: DownloadResult):
+            self._dispatch(report, on_done, result)
+
+        threading.Thread(target=self._run_download, args=(request, directory, status, done),
+                         daemon=True, name=f"Download-{request.node_hex[:8]}").start()
+
+    def _run_download(self, request: PageRequest, directory: str, status, done):
+        try:
+            if self.is_own_node(request.node):
+                response = self._local_response(request)
+                if not isinstance(response, (list, tuple)) or not response:
+                    done(DownloadResult(request, error="Diese Datei gibt es auf deiner Node nicht."))
+                    return
+                metadata = response[1] if len(response) > 1 else None
+                done(DownloadResult(request, save_download(response[0], metadata, request, directory)))
+                return
+            saved: List[str] = []
+            link = self._get_link(request.node, status)
+            self._request(link, request, status, "Datei",
+                          lambda receipt: saved.append(save_download(receipt.response, receipt.metadata,
+                                                                     request, directory)))
+            done(DownloadResult(request, saved[0]))
+        except _FetchError as e:
+            done(DownloadResult(request, error=str(e)))
+        except Exception as e:
+            RNS.log(f"Retchat: Error downloading {request.url}: {e}", RNS.LOG_ERROR)
+            done(DownloadResult(request, error=f"Fehler beim Herunterladen: {e}"))

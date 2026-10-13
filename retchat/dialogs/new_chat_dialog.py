@@ -29,10 +29,7 @@ def parse_target(text: str) -> Union[PageRequest, Contact]:
     """A NomadNet page link, or an address / contact link; raises ValueError."""
     value = (text or "").strip()
     if value.lower().startswith(URL_SCHEME) or _PAGE_URL_RE.fullmatch(value):
-        request = parse_url(value)
-        if request.is_file:
-            raise ValueError("Datei-Links werden noch nicht unterstützt")
-        return request
+        return parse_url(value)
     return parse_contact(value)
 
 
@@ -328,7 +325,10 @@ class NewChatDialog(Adw.Window):
             self._apply_kind("none", str(e))
             return
         self._target = target
-        if isinstance(target, PageRequest):
+        if isinstance(target, PageRequest) and target.is_file:
+            name = self._node_name(target.node_hex)
+            self._apply_kind("file", f"Datei von {name}: {target.path.rsplit('/', 1)[-1]}")
+        elif isinstance(target, PageRequest):
             name = self._node_name(target.node_hex)
             self._apply_kind("page", f"NomadNet-Seite: {name} · {target.path}")
         elif target.public_key is not None:
@@ -388,8 +388,8 @@ class NewChatDialog(Adw.Window):
     # --- State -----------------------------------------------------------------------------
 
     def _apply_kind(self, kind: str, status: str):
-        """kind: none (invalid/empty), page, contact, node, propagation,
-        searching, choose (toggle shown)."""
+        """kind: none (invalid/empty), page, file, contact, node,
+        propagation, searching, choose (toggle shown)."""
         self.kind = kind
         self.status_label.set_text(status)
         self.search_spinner.set_visible(kind == "searching")
@@ -397,7 +397,7 @@ class NewChatDialog(Adw.Window):
         if kind == "choose":
             self._update_for_choice()
             return
-        action = {"contact": "chat", "node": "page", "page": "page"}.get(kind)
+        action = {"contact": "chat", "node": "page", "page": "page", "file": "file"}.get(kind)
         self._set_action(action)
 
     def _update_for_choice(self):
@@ -408,8 +408,9 @@ class NewChatDialog(Adw.Window):
         """What the start button does: "chat", "page" or nothing."""
         self._action = action
         self.start_btn.set_sensitive(action is not None)
-        self.start_btn.set_label({"chat": "Chat starten", "page": "Seite öffnen"}.get(action, "Öffnen"))
-        self.name_row.set_visible(action != "page")
+        self.start_btn.set_label({"chat": "Chat starten", "page": "Seite öffnen",
+                                  "file": "Herunterladen"}.get(action, "Öffnen"))
+        self.name_row.set_visible(action not in ("page", "file"))
 
     def _resolved_address(self, action: str) -> str:
         """The address to open: for an identity hash, its chat or node address."""

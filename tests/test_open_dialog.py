@@ -160,5 +160,13 @@ def test_parse_target():
     from retchat.nomadnet_pages import PageRequest
     assert isinstance(parse_target(f"{NODE}:/page/x.mu"), PageRequest)
     assert parse_target(f"lxmf://{CONTACT}") == Contact(CONTACT)
-    with pytest.raises(ValueError):
-        parse_target(f"nomadnetwork://{NODE}:/file/x.zip")
+    assert parse_target(f"nomadnetwork://{NODE}:/file/x.zip").is_file
+
+
+def test_file_link_downloads(dialog):
+    d, _s, _chats, pages = dialog
+    d.hash_row.set_text(f"nomadnetwork://{NODE}:/file/karte.pdf")
+    assert _state(d) == ("file", "Herunterladen", True, False)
+    assert d.status_label.get_text() == "Datei von Mesh Café: karte.pdf"
+    d._on_start_clicked(None)
+    assert pages == [f"{NODE}:/file/karte.pdf"]

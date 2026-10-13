@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="retchat",
-    version="0.1.5",
+    version="0.1.6",
     description="Modern Reticulum Network LXMF Chat Client in GTK4 + Libadwaita",
     author="stereo",
     packages=find_packages(),

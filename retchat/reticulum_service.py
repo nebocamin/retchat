@@ -23,7 +23,7 @@ import RNS
 
 from retchat.contact_uri import Contact, contact_uri
 from retchat.database import Database
-from retchat.nomadnet_pages import PageFetcher
+from retchat.nomadnet_pages import FileDownloader, PageFetcher
 
 # Message states mapped for UI
 STATE_SENDING = 0
@@ -1526,6 +1526,19 @@ class ReticulumService:
             self._page_fetcher = PageFetcher(self.app, GLib.idle_add)
         return self._page_fetcher
 
+    @property
+    def file_downloader(self) -> FileDownloader:
+        if getattr(self, "_file_downloader", None) is None:
+            self._file_downloader = FileDownloader(self.app, GLib.idle_add)
+        return self._file_downloader
+
+    @property
+    def downloads_dir(self) -> str:
+        """Where files from NomadNet pages are saved: NomadNet's downloads_path
+        (client section of its config, default ~/Downloads), shared with the
+        terminal client."""
+        return getattr(self.app, "downloads_path", None) or os.path.expanduser("~/Downloads")
+
     @staticmethod
     def _identity_hash_for(dest_hex: str, aspect: str) -> Optional[str]:
         """Hash of the ``aspect`` destination with the same identity as ``dest_hex``."""
@@ -2218,6 +2231,8 @@ class ReticulumService:
         self._poll_stop = True
         if self._page_fetcher is not None:
             self._page_fetcher.cancel()
+        if getattr(self, "_file_downloader", None) is not None:
+            self._file_downloader.cancel()
         try:
             self._save_stamp_costs(force=True)
         except Exception as e:

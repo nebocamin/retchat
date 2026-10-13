@@ -487,10 +487,14 @@ class RetchatWindow(Adw.ApplicationWindow):
         except ValueError as e:
             self._show_toast(str(e))
             return
-        if request.is_file:
-            self._show_toast("Datei-Downloads werden noch nicht unterstützt")
-            return
         self._show_page_view()
+        if request.is_file:
+            # Show the node the file comes from, with the download banner
+            current = self.page_view.current_request
+            if current is None or current.node != request.node:
+                self.page_view.open_node(request.node_hex)
+            self.page_view.download(request)
+            return
         self.page_view.open_request(request)
 
     def _show_page_view(self):
