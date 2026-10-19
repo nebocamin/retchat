@@ -1114,8 +1114,10 @@ class ReticulumService:
                     if w > max_dim or h > max_dim:
                         scale = min(max_dim / w, max_dim / h)
                         new_size = (max(1, int(w * scale)), max(1, int(h * scale)))
-                        resample_filter = getattr(Image.Resampling, "LANCZOS", Image.LANCZOS)
-                        im = im.resize(new_size, resample_filter)
+                        # Image.Resampling exists since Pillow 9.1; the old module-level
+                        # constants may be removed (an AttributeError here would send
+                        # the image unscaled, see the except below)
+                        im = im.resize(new_size, Image.Resampling.LANCZOS)
 
                     buf = io.BytesIO()
                     try:
