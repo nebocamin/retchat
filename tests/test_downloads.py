@@ -99,14 +99,20 @@ def view(tmp_path):
     Adw.init()
     service = types.SimpleNamespace(file_downloader=FakeDownloader(), downloads_dir=str(tmp_path),
                                     own_node_hex=None, node_name=lambda h: "Mesh Café",
-                                    is_saved_node=lambda h: False)
+                                    is_saved_node=lambda h: False, identifies_to=lambda h: h in identified,
+                                    set_identify=lambda h, on: identified.add(h) if on else identified.discard(h),
+                                    page_fetcher=types.SimpleNamespace(cancel=lambda: fetch.append("cancel"),
+                                                                       fetch=lambda *a, **k: fetch.append("fetch")),
+                                    app=types.SimpleNamespace(cachepath=str(tmp_path)))
+    identified, fetch = set(), []
     overlay = Adw.ToastOverlay()
     page_view = PageView(service, on_back_clicked=lambda: None, on_open_chat=lambda h: None)
     overlay.set_child(page_view)
     toasts = []
     overlay.add_toast = lambda t: toasts.append(t.get_title())
-    win = Gtk.Window(child=overlay)
+    win = Adw.Window(content=overlay)
     win.present()
+    page_view.identified, page_view.fetch_log = identified, fetch
     yield page_view, service.file_downloader, toasts, tmp_path
     win.destroy()
 
@@ -148,3 +154,32 @@ def test_file_links_on_pages_download(view):
     page_view, dl, _toasts, _tmp = view
     page_view._on_link(Link(url=f"{NODE.hex()}:/file/karte.pdf"))
     assert dl.calls and dl.calls[0][0].path == "/file/karte.pdf"
+
+
+def test_identify_menu_state_and_reload(view):
+    page_view, _dl, toasts, _tmp = view
+    request = PageRequest(NODE, "/page/index.mu")
+    page_view.open_request(request)
+    action = page_view._actions["identify"]
+    assert action.get_enabled() and action.get_state().get_boolean() is False
+    page_view.fetch_log.clear()
+    page_view.set_identify(request, True)  # as after "Identifizieren" in the dialog
+    assert page_view.identified == {NODE.hex()} and action.get_state().get_boolean() is True
+    assert page_view.fetch_log == ["cancel", "fetch"]  # new link, page loaded again
+    assert toasts[-1] == "Du identifizierst dich bei «Mesh Café»"
+    # Switching off needs no confirmation
+    action.change_state(__import__("gi.repository.GLib", fromlist=["GLib"]).Variant.new_boolean(False))
+    assert page_view.identified == set() and action.get_state().get_boolean() is False
+    assert toasts[-1] == "Du bist bei «Mesh Café» wieder anonym"
+
+
+def test_identify_asks_first(view):
+    from gi.repository import Adw, GLib
+    page_view, _dl, _toasts, _tmp = view
+    page_view.open_request(PageRequest(NODE, "/page/index.mu"))
+    page_view._actions["identify"].activate(None)  # menu item
+    dialog = page_view.get_root().get_visible_dialog()
+    assert isinstance(dialog, Adw.AlertDialog) and "Mesh Café" in dialog.get_body()
+    assert page_view.identified == set()  # nothing until confirmed
+    dialog.emit("response", "identify")
+    assert page_view.identified == {NODE.hex()}

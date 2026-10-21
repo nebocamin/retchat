@@ -79,6 +79,7 @@ class PageView(Adw.Bin):
         page_section.append("Adresse kopieren", "page.copy-url")
         menu.append_section(None, page_section)
         node_section = Gio.Menu()
+        node_section.append("Identifizieren", "page.identify")
         node_section.append("Betreiber anschreiben", "page.contact-operator")
         menu.append_section(None, node_section)
         header.pack_end(Gtk.MenuButton(icon_name="view-more-symbolic", tooltip_text="Optionen", menu_model=menu))
@@ -125,6 +126,12 @@ class PageView(Adw.Bin):
             action.connect("activate", lambda _a, _p, fn=handler: fn())
             group.add_action(action)
             self._actions[name] = action
+        # Identify to the node (stateful: shown with a check mark)
+        identify = Gio.SimpleAction.new_stateful("identify", None, GLib.Variant.new_boolean(False))
+        identify.connect("change-state", self._on_identify_change)
+        identify.connect("activate", lambda a, _p: a.change_state(GLib.Variant.new_boolean(not a.get_state().get_boolean())))
+        group.add_action(identify)
+        self._actions["identify"] = identify
         self.insert_action_group("page", group)
 
         shortcuts = Gtk.ShortcutController()
@@ -323,6 +330,9 @@ class PageView(Adw.Bin):
         own = request is not None and request.node_hex == self.service.own_node_hex
         self._actions["contact-operator"].set_enabled(request is not None and not own)
         self._actions["save-node"].set_enabled(request is not None and not own)
+        self._actions["identify"].set_enabled(request is not None and not own)
+        identified = request is not None and not own and self.service.identifies_to(request.node_hex)
+        self._actions["identify"].set_state(GLib.Variant.new_boolean(identified))
         saved = request is not None and self.service.is_saved_node(request.node_hex)
         self.save_btn.set_icon_name("starred-symbolic" if saved else "non-starred-symbolic")
         self.save_btn.set_tooltip_text("Node gespeichert – entfernen (Strg+D)" if saved
@@ -436,6 +446,45 @@ class PageView(Adw.Bin):
             launcher.open_containing_folder(self.get_root(), None, finished)
         else:
             launcher.launch(self.get_root(), None, finished)
+
+    # --- Identifying ------------------------------------------------------------------
+
+    def _on_identify_change(self, _action, value: GLib.Variant):
+        request = self.current_request or self._loading
+        if request is None or request.node_hex == self.service.own_node_hex:
+            return
+        if value.get_boolean():
+            self._confirm_identify(request)
+        else:
+            self.set_identify(request, False)
+
+    def _confirm_identify(self, request: PageRequest):
+        name = self._node_title(request)
+        dialog = Adw.AlertDialog(
+            heading="Bei dieser Node identifizieren?",
+            body=(f"«{name}» erfährt deinen öffentlichen Schlüssel und damit, wer du bist "
+                  "(deine Adresse). Manche Seiten zeigen dir dann eigene Inhalte oder verlangen das "
+                  "für Formulare. Retchat identifiziert sich bei dieser Node künftig bei jeder "
+                  "Verbindung, bis du es wieder ausschaltest."))
+        dialog.add_response("cancel", "Abbrechen")
+        dialog.add_response("identify", "Identifizieren")
+        dialog.set_response_appearance("identify", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_default_response("identify")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", lambda _d, r: self.set_identify(request, True) if r == "identify" else None)
+        dialog.present(self)
+
+    def set_identify(self, request: PageRequest, identify: bool):
+        """Store the choice and reload over a new link (identification
+        happens when the link is opened, before the first request)."""
+        self.service.set_identify(request.node_hex, identify)
+        self.service.page_fetcher.cancel()  # closes the link
+        self._update_actions()
+        name = self._node_title(request)
+        self._toast(f"Du identifizierst dich bei «{name}»" if identify
+                    else f"Du bist bei «{name}» wieder anonym")
+        if self.current_request is not None or self._loading is not None:
+            self.reload()
 
     def _toggle_saved(self):
         request = self.current_request or self._loading

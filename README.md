@@ -53,6 +53,9 @@ The icon is a speech bubble shaped like a ratchet wheel – Retchat, ratchet.
   - Browse the pages of NomadNet nodes, with back/forward history.
   - Save a node with the star in the page view (Ctrl+D); saved nodes are listed under *Seiten* in the sidebar.
     They are stored in NomadNet's directory, so the NomadNet terminal client shows them as saved nodes too.
+  - Identify yourself to a node (page menu → *Identifizieren*): Retchat then sends your public key when connecting,
+    so pages can show personal content or accept forms. Asked once per node, remembered in NomadNet's directory
+    ("identify when connecting", as in the terminal client); switching it off reloads the page anonymously.
   - Download files offered on pages (`/file/…` links, also `nomadnetwork://` file links in messages) into NomadNet's
     downloads folder (`downloads_path`, default `~/Downloads`), with progress and cancel; executables and scripts are
     saved, not opened.

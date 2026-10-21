@@ -75,3 +75,29 @@ def test_address_kind(service, known):
     assert service.address_kind(NODE_ID.hash.hex()) == ("identity", None)
     assert service.address_kind("ab" * 16) == ("unknown", None)
     assert service.addresses_for_identity(NODE_ID.hash.hex()) == {"contact": OPERATOR, "node": NODE}
+
+
+def test_identify_unsaved_node(service):
+    assert not service.identifies_to(NODE)
+    service.set_identify(NODE, True)
+    assert service.identifies_to(NODE)
+    assert not service.is_saved_node(NODE) and service.saved_nodes() == []  # not listed under "Seiten"
+    service.set_identify(NODE, False)
+    assert not service.identifies_to(NODE) and service.app.directory.find(bytes.fromhex(NODE)) is None
+
+
+def test_identify_saved_node(service):
+    service.save_node(NODE)
+    service.set_identify(NODE, True)
+    service.forget_node(NODE)  # still identifies: the entry stays, no longer saved
+    assert service.identifies_to(NODE) and not service.is_saved_node(NODE)
+    service.save_node(NODE)
+    service.set_identify(NODE, False)
+    assert service.is_saved_node(NODE) and not service.identifies_to(NODE)
+
+
+def test_identify_flag_is_stored_in_nomadnets_file(service, tmp_path):
+    import RNS.vendor.umsgpack as umsgpack
+    service.set_identify(NODE, True)
+    entries = umsgpack.unpackb((tmp_path / "directory").read_bytes())["entry_list"]
+    assert [(e[0].hex(), e[3], e[5]) for e in entries] == [(NODE, False, True)]  # hosts_node, identify

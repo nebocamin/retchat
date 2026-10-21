@@ -1665,8 +1665,8 @@ class ReticulumService:
     def forget_node(self, node_hex: str) -> Optional[str]:
         """Remove a node from the saved ones; returns its saved name (for undo).
 
-        An entry with a trust level or notes set in NomadNet stays in the
-        directory, only no longer as a saved node.
+        An entry with a trust level, notes or "identify when connecting" set
+        stays in the directory, only no longer as a saved node.
         """
         from nomadnet.Directory import DirectoryEntry
         directory = self._directory()
@@ -1677,12 +1677,47 @@ class ReticulumService:
         if entry is None:
             return None
         name = entry.display_name
-        if entry.trust_level == DirectoryEntry.UNKNOWN and not entry.notes:
+        if entry.trust_level == DirectoryEntry.UNKNOWN and not entry.notes and not entry.identify:
             directory.forget(source_hash)
         else:
             entry.hosts_node = False
         directory.save_to_disk()  # forget() doesn't save
         return name
+
+    def identifies_to(self, node_hex: str) -> bool:
+        """Whether Retchat identifies itself (its public key) when connecting to the node."""
+        directory = self._directory()
+        if directory is None:
+            return False
+        return bool(directory.should_identify_on_connect(bytes.fromhex(node_hex.strip().lower())))
+
+    def set_identify(self, node_hex: str, identify: bool):
+        """Identify to the node from the next connection on, or stop doing so.
+
+        NomadNet's directory flag ("Identify when connecting"), shared with
+        the terminal client; the page and file fetchers read it when they
+        open a link. A node needn't be saved for it: unsaved nodes get a
+        directory entry that isn't a saved node, removed again with the flag.
+        """
+        from nomadnet.Directory import DirectoryEntry
+        directory = self._directory()
+        if directory is None:
+            return
+        node_hex = node_hex.strip().lower()
+        source_hash = bytes.fromhex(node_hex)
+        entry = directory.find(source_hash)
+        if entry is None:
+            if not identify:
+                return
+            entry = DirectoryEntry(source_hash, display_name=self.node_name(node_hex), hosts_node=False,
+                                   identify_on_connect=True)
+            directory.remember(entry)  # also saves
+            return
+        entry.identify = identify
+        if (not identify and not entry.hosts_node and entry.trust_level == DirectoryEntry.UNKNOWN
+                and not entry.notes):
+            directory.forget(source_hash)
+        directory.save_to_disk()
 
     def address_kind(self, dest_hex: str) -> Tuple[str, Optional[str]]:
         """What an address is: (kind, name) with kind "contact", "node",
